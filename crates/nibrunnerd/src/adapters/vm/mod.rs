@@ -1,4 +1,5 @@
 pub mod firecracker_api;
+pub(crate) mod identity;
 pub(crate) mod jailer_inputs;
 pub mod layers;
 pub(crate) mod limits;

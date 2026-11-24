@@ -90,3 +90,18 @@ Also verify KSM is stopped and has no retained shared pages before upgrading to 
 that enforces the KSM requirement.
 Keep host settings persistent: a startup check cannot prevent a host administrator from
 changing them after apps have started.
+
+## Drop workload identity
+
+On a Drop development host, the issuer prepares a root-owned directory at
+`/run/drop-m1/identities/<appId>/` containing `role-arn` and a rotating OIDC JWT in
+`token`. The issuer replaces the token file atomically. The host selects this directory from
+the app ID assigned to each Firecracker jail. Configure AWS trust for that app's issuer,
+audience and subject.
+
+Set `AWS_WORKLOAD_IDENTITY=1` in the app environment. Guest init obtains the role and token
+over the jail's vsock before starting the app, sets `AWS_ROLE_ARN` and
+`AWS_WEB_IDENTITY_TOKEN_FILE`, and publishes the token in a read-only directory under
+`/run/drop-identity`. The guest checks for a replacement every 15 seconds while running.
+On snapshot restore, init synchronizes the clock and refreshes the token before releasing
+the tenant. The host requires at least ten seconds of remaining token lifetime for delivery.

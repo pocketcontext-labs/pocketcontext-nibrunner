@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use guest_contract::paths;
 
-use crate::guest::{log, vsock};
+use crate::guest::{identity, log, vsock};
 
 const FREEZE_REQUEST: &str = "FREEZE";
 const FREEZE_HELD: &str = "OK";
@@ -38,16 +38,26 @@ pub(crate) fn serve() -> ! {
         }
     }
     let mut frozen_until = None;
+    let mut refresh_at = identity::enabled().then(|| Instant::now() + identity::REFRESH_INTERVAL);
     loop {
         if frozen_until.is_some_and(|deadline| Instant::now() >= deadline) {
-            if std::fs::write(TENANT_FREEZE, "0").is_err() {
-                std::thread::sleep(ERROR_BACKOFF);
-                continue;
+            if identity::refresh()
+                .and_then(|()| std::fs::write(TENANT_FREEZE, "0"))
+                .is_err()
+            {
+                frozen_until = Some(Instant::now() + ERROR_BACKOFF);
+            } else {
+                frozen_until = None;
+                log("the host abandoned the tenant freeze; the tenant has been released");
             }
-            frozen_until = None;
-            log("the host abandoned the tenant freeze; the tenant has been released");
         }
-        match crate::control_wait::readable(&listener, frozen_until) {
+        if frozen_until.is_none() && refresh_at.is_some_and(|at| Instant::now() >= at) {
+            if identity::refresh().is_err() {
+                log("workload identity refresh failed");
+            }
+            refresh_at = Some(Instant::now() + identity::REFRESH_INTERVAL);
+        }
+        match crate::control_wait::readable(&listener, frozen_until.or(refresh_at)) {
             Ok(true) => match vsock::accept_from_host(&listener) {
                 Ok(connection) => answer(connection, &mut frozen_until),
                 Err(_) => std::thread::sleep(ERROR_BACKOFF),
@@ -155,6 +165,10 @@ fn freeze_tenant() -> std::io::Result<()> {
 fn synchronize_clock(wire: &mut BufReader<std::fs::File>) -> std::io::Result<()> {
     let nanos = crate::clock_sync::host_time(wire)?;
     set_clock(nanos)?;
+    identity::refresh()?;
+    if identity::enabled() {
+        log("workload identity refreshed before tenant release");
+    }
     std::fs::write(TENANT_FREEZE, "0")?;
     writeln!(
         wire.get_mut(),

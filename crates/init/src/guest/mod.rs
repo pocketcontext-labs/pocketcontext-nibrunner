@@ -2,6 +2,7 @@ mod channels;
 mod control;
 mod cron;
 mod filesystem;
+mod identity;
 mod logs;
 mod memory;
 mod mounts;
@@ -63,9 +64,10 @@ fn boot() -> Result<(InstanceConfig, memory::Ceiling), String> {
     mounts::pseudo_filesystems().map_err(|error| error.to_string())?;
     memory::mount().map_err(|error| error.to_string())?;
     let ceiling = memory::prepare(guest_memory_bytes())?;
-    let config = read_instance_config()?;
+    let mut config = read_instance_config()?;
     stack_root(&config)?;
     write_resolv_conf(&config)?;
+    identity::prepare(&mut config).map_err(|error| format!("workload identity setup failed: {error}"))?;
     Ok((config, ceiling))
 }
 

@@ -46,6 +46,7 @@ pub struct VmManager {
     pub network: Arc<dyn HostNetwork>,
     pub volumes: Arc<dyn VolumeBackend>,
     pub logs: Arc<TenantLogReceiver>,
+    pub(crate) identities: super::identity::Identities,
     pub cron_registration: Arc<crate::adapters::cron_registration::CronRegistrationReceiver>,
     pub sink: Arc<dyn LogSink>,
     pub state: SharedState,
@@ -251,7 +252,10 @@ impl VmManager {
             self.logs.detach(app_id).await;
             return Err(VmError::Host(error.to_string()));
         }
-        Ok(())
+        self.identities
+            .attach(app_id, working_dir)
+            .await
+            .map_err(|error| VmError::Host(error.to_string()))
     }
 
     async fn stage(&self, request: &BootRequest) -> Result<PreparedVm, VmError> {
@@ -267,6 +271,8 @@ impl VmManager {
         .await?;
         let granted = async {
             jail.grant_socket(&tenant_log_socket_path(&jail.root))
+                .map_err(|error| VmError::Host(error.to_string()))?;
+            jail.grant_identity_socket()
                 .map_err(|error| VmError::Host(error.to_string()))?;
             jail.grant_socket(&cron_registration_socket_path(&jail.root))
                 .map_err(|error| VmError::Host(error.to_string()))?;
@@ -294,6 +300,7 @@ impl VmManager {
                 "a running microVM cannot have its jail rebuilt".into(),
             ));
         }
+        self.identities.detach(app_id).await;
         self.logs.detach(app_id).await;
         self.cron_registration.detach(app_id).await;
         self.jailer
@@ -709,6 +716,8 @@ impl Vmm for VmManager {
         self.readopt(&request.app_id).await?;
         jail.grant_socket(&tenant_log_socket_path(&jail.root))
             .map_err(|error| VmError::Host(error.to_string()))?;
+        jail.grant_identity_socket()
+            .map_err(|error| VmError::Host(error.to_string()))?;
         jail.grant_socket(&cron_registration_socket_path(&jail.root))
             .map_err(|error| VmError::Host(error.to_string()))?;
         self.network
@@ -809,6 +818,7 @@ impl Vmm for VmManager {
     async fn discard(&self, app_id: &AppId) -> Result<(), VmError> {
         self.discard_snapshot(app_id);
         self.processes.forget(app_id);
+        self.identities.detach(app_id).await;
         self.logs.detach(app_id).await;
         self.cron_registration.detach(app_id).await;
         let _ = std::fs::remove_dir_all(self.vm_dir.join(app_id.as_str()));
@@ -1176,6 +1186,7 @@ mod tests {
                 ),
             )),
             logs: TenantLogReceiver::new(),
+            identities: super::super::identity::Identities::new(root.join("identities")),
             cron_registration: crate::adapters::cron_registration::CronRegistrationReceiver::new(Arc::new(
                 crate::domain::cron::registry::CronRegistry::new(
                     Arc::new(crate::repositories::cron_repository::MockCronRepository::new()),

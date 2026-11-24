@@ -208,6 +208,14 @@ impl Jail {
         }
     }
 
+    pub(crate) fn grant_identity_socket(&self) -> std::io::Result<()> {
+        let path = super::identity::socket_path(&self.root);
+        match self.grant_socket(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            result => result,
+        }
+    }
+
     pub(crate) fn grant_socket(&self, path: &Path) -> std::io::Result<()> {
         own(path, self.uid, self.gid)
     }
