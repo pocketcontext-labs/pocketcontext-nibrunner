@@ -1837,9 +1837,9 @@ mod tests {
     }
     use std::path::Path;
 
-    /// The smallest document this daemon accepts. Every key it reads is in here, because there is
-    /// no key it will supply for itself, so a test about one key starts from the whole document.
+    /// The starter configuration before adding the optional listener sections.
     const WHOLE: &str = r#"max_apps = 1000
+lifecycle_hook_timeout_seconds = 10
 max_concurrent_vm_starts = 2
 
 [cron]
@@ -2006,6 +2006,12 @@ denied_egress_addresses_v6 = []
             assert!(HostConfig::from_toml(&invalid).is_err());
             assert!(!validator.is_valid(&json(&invalid)));
         }
+    }
+
+    #[test]
+    fn existing_hosts_default_to_a_ten_second_hook_timeout() {
+        let config = parsed(&without("lifecycle_hook_timeout_seconds"));
+        assert_eq!(config.lifecycle_hook_timeout_seconds.get(), 10);
     }
 
     #[test]
