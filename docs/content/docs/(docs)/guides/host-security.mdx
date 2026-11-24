@@ -114,3 +114,39 @@ A separate guest worker fetches a token for the configured role, retries after f
 replaces the file as tokens rotate. On wake, init discards the previous file and releases the
 tenant after synchronizing its clock. Clients must handle a missing token while local service
 continues. A missing database still requires successful application-level recovery.
+
+## Drop sign-in email
+
+A Drop host can send a plain-text sign-in code for an enrolled app. Drop sets
+`signInEmail.recipient` on the desired instance using the owner's verified mailbox at app creation.
+The guest connects to host CID 2 on vsock port 51006 and writes one UTF-8 JSON line per connection.
+
+```json
+{"code":"012345"}
+```
+
+The host accepts a string of six ASCII digits. Each request and response fits in 128 bytes
+including the terminating LF. The response is a JSON object with one `status` string.
+`accepted` means the SMTP server accepted the message. Other outcomes are `invalid_request`,
+`disabled`, `throttled` and `temporarily_unavailable`. A missing reply can follow successful
+submission. The guest should wait up to 12 seconds and leave a fresh send to the user.
+
+Provision a root-readable service credential using a systemd drop-in for `nibrunnerd.service`.
+
+```ini
+[Service]
+LoadCredential=sign-in-email.toml:/etc/nibrunner/sign-in-email.toml
+```
+
+The credential contains `host`, `username`, `password` and `sender`. For Resend use
+`smtp.resend.com`, the SMTP username `resend`, the service's sending key and a mailbox on
+a verified sending domain. The service uses implicit TLS on port 465. A test host can
+set `port` and `ca_file` for a private SMTP endpoint. Restart the service after rotating
+the credential. Hosts without this credential can run apps normally. [Resend SMTP settings](https://resend.com/docs/send-with-smtp)
+
+The host compares each jail's launch deployment with its last accepted desired state.
+An applied removal, stop, or change of deployment prevents further submissions from that jail.
+A disconnected node continues with its applied state, including after a daemon restart.
+Fence the source before activating a move that requires exclusive delivery. The host
+admits five submissions per minute per app and per mailbox, counting failures too.
+Limits cover one daemon lifetime. At most 16 SMTP submissions run concurrently.

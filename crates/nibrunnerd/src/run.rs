@@ -62,6 +62,7 @@ pub async fn build_host(
     );
     let commands: Arc<dyn crate::ports::CommandRunner> = Arc::new(HostCommands);
     let state = HostState::shared();
+    let cache = Arc::new(Mutex::new(DesiredStateCache::new()));
     let repositories = crate::repositories::Repositories::sqlite(
         crate::domain::store::open(&config.state_db_file())
             .await
@@ -147,6 +148,9 @@ pub async fn build_host(
         volumes: volumes.clone(),
         logs,
         cron_registration,
+        sign_in_email: crate::adapters::vm::sign_in_email::SignInEmailService::from_service_credentials(
+            cache.clone(),
+        ),
         identities: crate::adapters::vm::identity::Identities::new(
             "/run/drop-m1/identities".into(),
             "/etc/nibrunner/workload-identity".into(),
@@ -225,7 +229,7 @@ pub async fn build_host(
         exports,
         nbd: crate::adapters::volumes::nbd::NbdDevices::new(commands.clone()),
         commands: commands.clone(),
-        cache: Mutex::new(DesiredStateCache::new()),
+        cache,
         vms,
         logs: files,
         volumes,

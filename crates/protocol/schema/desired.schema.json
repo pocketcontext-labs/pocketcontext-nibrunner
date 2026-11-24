@@ -320,6 +320,17 @@
           "maxItems": 8,
           "minItems": 1
         },
+        "signInEmail": {
+          "description": "Submit six-digit sign-in codes to this mailbox through the host.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SignInEmail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "volumeId": {
           "description": "One of this document's `volumes`, mounted in the guest as the app's data directory.",
           "$ref": "#/$defs/VolumeId"
@@ -987,6 +998,32 @@
       "description": "a lowercase hex sha-256",
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "SignInEmail": {
+      "type": "object",
+      "properties": {
+        "recipient": {
+          "$ref": "#/$defs/SignInMailbox"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "recipient"
+      ]
+    },
+    "SignInMailbox": {
+      "description": "one ASCII mailbox",
+      "type": "string",
+      "format": "email",
+      "allOf": [
+        {
+          "pattern": "^[^@]{1,64}@"
+        },
+        {
+          "pattern": "^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(\\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+        }
+      ],
+      "maxLength": 254
     },
     "SleepPolicy": {
       "description": "What puts a running microVM back to sleep. Only an `on-request` instance may carry one that\nfires: nothing else on this host would wake it again, and the next reconcile pass would bring\nit straight back up.",

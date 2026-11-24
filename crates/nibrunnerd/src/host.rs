@@ -28,7 +28,7 @@ pub struct Host {
     pub guest_image_version: String,
     pub state: SharedState,
     pub allocator: Arc<Mutex<SlotAllocator>>,
-    pub cache: Mutex<DesiredStateCache>,
+    pub cache: Arc<Mutex<DesiredStateCache>>,
     pub vms: Arc<dyn Vmm>,
     /// What every tenant's output is written to, held here as well as behind the receiver so that
     /// a pass can let an app's output go once the app itself is no longer on this host.
@@ -198,23 +198,26 @@ impl Host {
 
     /// The row is written only when the bytes moved: a document read again unchanged — which the
     /// watch's backstop brings round every half minute — is the one already there.
-    pub async fn remember_accepted_document(&self, document: &AcceptedDocument) {
+    pub async fn remember_accepted_document(
+        &self,
+        document: &AcceptedDocument,
+    ) -> Result<(), crate::domain::store::StoreError> {
         self.remember_host_id(document.desired.host_id.as_str()).await;
-        let moved = self
+        if self
             .state
+            .modify(|snapshot| snapshot.accepted_digest.as_ref() == Some(&document.digest))
+            .await
+        {
+            return Ok(());
+        }
+        self.repositories.accepted_document.remember(document).await?;
+        self.state
             .modify(|snapshot| {
-                let moved = snapshot.accepted_digest.as_ref() != Some(&document.digest);
                 snapshot.accepted_digest = Some(document.digest.clone());
                 snapshot.accepted_revision = Some(document.desired.revision.clone());
-                moved
             })
             .await;
-        if !moved {
-            return;
-        }
-        if let Err(error) = self.repositories.accepted_document.remember(document).await {
-            tracing::warn!(error = %error.message(), "this host could not write down the document it took up");
-        }
+        Ok(())
     }
 }
 
@@ -304,15 +307,15 @@ mod tests {
         let host = test_host_with(repositories).await;
 
         let document = accepted_document(desired_state(|_| {}));
-        host.remember_accepted_document(&document).await;
-        host.remember_accepted_document(&document).await;
+        host.remember_accepted_document(&document).await.unwrap();
+        host.remember_accepted_document(&document).await.unwrap();
         assert_eq!(written.load(Ordering::SeqCst), 1);
         assert_eq!(host.state.snapshot().await.accepted_digest, Some(document.digest));
 
         let later = accepted_document(desired_state(|state| {
             state.instances = vec![desired_instance(|_| {})]
         }));
-        host.remember_accepted_document(&later).await;
+        host.remember_accepted_document(&later).await.unwrap();
         assert_eq!(written.load(Ordering::SeqCst), 2);
         assert_eq!(host.state.snapshot().await.accepted_digest, Some(later.digest));
     }
@@ -338,8 +341,8 @@ mod tests {
             state.host_id = protocol::HostId::parse("hetzner-test").unwrap();
         }));
 
-        host.remember_accepted_document(&document).await;
-        host.remember_accepted_document(&document).await;
+        host.remember_accepted_document(&document).await.unwrap();
+        host.remember_accepted_document(&document).await.unwrap();
     }
 
     #[tokio::test]

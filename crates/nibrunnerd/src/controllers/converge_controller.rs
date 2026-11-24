@@ -36,7 +36,7 @@ impl ConvergeController {
         if !self.supports_volume_storage(&accepted.desired).await {
             return false;
         }
-        let Ok(Some(changes)) = self.accept(&accepted.desired).await else {
+        let Ok(Some(changes)) = self.accept(&accepted).await else {
             return false;
         };
         converge::detected(&self.host, &changes, Cause::Restart, crate::clock::now_ms()).await;
@@ -53,9 +53,8 @@ impl ConvergeController {
                 self.forget_refusal().await;
                 // Taken up before anything is converged on, and whether or not the ask moved: a
                 // document rewritten to the same ask is still the one the report answers for.
-                self.host.remember_accepted_document(&document).await;
-                let desired = document.desired;
-                let trigger = match self.accept(&desired).await {
+                let desired = &document.desired;
+                let trigger = match self.accept(&document).await {
                     Ok(Some(changes)) => {
                         converge::detected(&self.host, &changes, Cause::Change, crate::clock::now_ms()).await;
                         Trigger::Change
@@ -63,11 +62,11 @@ impl ConvergeController {
                     Ok(None) if !self.host.state.snapshot().await.deferred_work => return false,
                     Ok(None) => Trigger::Deferred,
                     Err(error) => {
-                        tracing::warn!(%error, "cron registrations could not follow the desired deployments");
+                        tracing::warn!(%error, "desired deployments could not be applied");
                         return false;
                     }
                 };
-                self.reconcile(&desired, trigger).await;
+                self.reconcile(desired, trigger).await;
                 true
             }
             Ok(None) => false,
@@ -140,8 +139,9 @@ impl ConvergeController {
     /// What moved, when the document did; nothing when it stood still.
     async fn accept(
         &self,
-        desired: &HostDesiredState,
+        document: &crate::desired::AcceptedDocument,
     ) -> Result<Option<Changes>, crate::domain::cron::registry::CronRegistryError> {
+        let desired = &document.desired;
         let changes = {
             let mut cache = self.host.cache.lock().await;
             let deployments = desired
@@ -150,6 +150,7 @@ impl ConvergeController {
                 .map(|instance| (instance.app_id.clone(), instance.deployment_id.clone()))
                 .collect::<Vec<_>>();
             self.host.cron.synchronize(&deployments).await?;
+            self.host.remember_accepted_document(document).await?;
             let changes = cache.changes_in(desired);
             cache.accept(desired.clone()).then_some(changes)
         };
@@ -220,7 +221,7 @@ mod tests {
         assert_eq!(document.desired, desired);
 
         let previous = accepted_document(desired_state(|_| {}));
-        host.remember_accepted_document(&previous).await;
+        host.remember_accepted_document(&previous).await.unwrap();
         let mut reconciler = MockReconcileService::new();
         reconciler.expect_reconcile().never();
         let controller = controller(&host, reconciler);
@@ -233,7 +234,7 @@ mod tests {
             .await
             .contains("nibrunner_desired_state_unreadable_total 0\n"));
 
-        host.remember_accepted_document(&document).await;
+        host.remember_accepted_document(&document).await.unwrap();
         assert!(!controller.converge_accepted().await);
         assert!(host.cache.lock().await.latest().is_none());
     }
@@ -249,7 +250,8 @@ mod tests {
             })]
         });
         let controller = controller(&host, MockReconcileService::new());
-        let accepting = controller.accept(&desired);
+        let document = accepted_document(desired.clone());
+        let accepting = controller.accept(&document);
         tokio::pin!(accepting);
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             tokio::select! {
@@ -300,6 +302,9 @@ mod tests {
     async fn a_cron_registry_failure_does_not_reconcile_an_unaccepted_document_even_with_deferred_work() {
         let mut host = test_host().await;
         let previous = desired_state(|state| state.instances = vec![desired_instance(|_| {})]);
+        host.remember_accepted_document(&accepted_document(previous.clone()))
+            .await
+            .unwrap();
         host.cache.lock().await.accept(previous.clone());
         host.state.modify(|state| state.deferred_work = true).await;
         let desired = desired_state(|state| {
@@ -321,6 +326,7 @@ mod tests {
         reconciler.expect_reconcile().times(0);
         assert!(!controller(&host, reconciler).converge_once().await);
         assert_eq!(host.cache.lock().await.latest(), Some(&previous));
+        assert_eq!(host.accepted_document().await.unwrap().desired, previous);
     }
 
     #[tokio::test]
@@ -514,15 +520,27 @@ mod tests {
     #[tokio::test]
     async fn the_last_document_this_host_was_given_is_what_a_restart_converges_on_first() {
         let host = test_host().await;
+        let before = desired_state(|s| {
+            s.instances = vec![desired_instance(|i| {
+                i.sign_in_email = Some(protocol::SignInEmail {
+                    recipient: protocol::SignInMailbox::parse("owner@example.org").unwrap(),
+                })
+            })]
+        });
         host.repositories
             .accepted_document
-            .remember(&accepted_document(desired_state(|_| {})))
+            .remember(&accepted_document(before.clone()))
             .await
             .unwrap();
 
         let mut reconciler = MockReconcileService::new();
         reconciler.expect_reconcile().times(1).returning(|_, _| ());
-        assert!(controller(&host, reconciler).converge_accepted().await);
+        let controller = controller(&host, reconciler);
+        assert!(controller.converge_accepted().await);
+        std::fs::create_dir_all(host.config.desired_state_file.parent().unwrap()).unwrap();
+        std::fs::write(&host.config.desired_state_file, b"{").unwrap();
+        assert!(!controller.converge_once().await);
+        assert_eq!(host.cache.lock().await.latest(), Some(&before));
     }
 
     #[tokio::test]

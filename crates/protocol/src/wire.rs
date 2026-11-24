@@ -274,6 +274,30 @@ fn is_dns_label(value: &str) -> bool {
 
 validated_string!(DnsLabel, "label", "a DNS label", is_dns_label, { "pattern": DNS_LABEL_PATTERN });
 
+fn is_mailbox(value: &str) -> bool {
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    value.len() <= 254
+        && local.len() <= 64
+        && local.split('.').all(|atom| {
+            !atom.is_empty()
+                && atom
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"!#$%&'*+-/=?^_`{|}~".contains(&c))
+        })
+        && domain
+            .split('.')
+            .all(|label| is_dns_label(&label.to_ascii_lowercase()))
+}
+
+validated_string!(SignInMailbox, "address", "one ASCII mailbox",
+    is_mailbox, { "format": "email", "maxLength": 254,
+        "allOf": [
+            { "pattern": r"^[^@]{1,64}@" },
+            { "pattern": r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$" }
+        ] });
+
 pub const MAX_HOSTNAME_LENGTH: usize = 253;
 pub const HOSTNAME_PATTERN: &str =
     r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$";

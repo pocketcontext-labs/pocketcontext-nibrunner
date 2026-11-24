@@ -56,6 +56,8 @@ fn extract_binary(directory: &Path, name: &str, bytes: &[u8]) -> std::io::Result
 #[serde(rename_all = "camelCase")]
 pub struct VmRecord {
     pub app_id: AppId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<protocol::DeploymentId>,
     pub pid: i32,
     pub host_boot_id: String,
     pub started_at_ms: i64,
@@ -112,6 +114,7 @@ pub fn host_boot_id_or_session() -> String {
     read_host_boot_id().unwrap_or_else(|_| format!("session-{}", std::process::id()))
 }
 
+#[derive(Clone)]
 pub struct VmProcesses {
     runtime_dir: PathBuf,
     boot_id: String,
@@ -182,6 +185,19 @@ impl VmProcesses {
             .collect()
     }
 
+    pub(super) fn running_deployment(&self, app_id: &AppId) -> Option<protocol::DeploymentId> {
+        let record = self.read_record(app_id)?;
+        if record.app_id != *app_id
+            || record.host_boot_id != self.boot_id
+            || record.stop_requested
+            || record.exit().is_some()
+            || !is_alive(record.pid)
+        {
+            return None;
+        }
+        record.deployment_id
+    }
+
     pub fn status(&self, app_id: &AppId) -> VmStatus {
         let Some(record) = self.read_record(app_id) else {
             return VmStatus::default();
@@ -200,13 +216,14 @@ impl VmProcesses {
 
     pub(crate) async fn spawn(
         &self,
-        app_id: &AppId,
+        identity: (&AppId, &protocol::DeploymentId),
         binary: &Path,
         jailer: &super::jailer::Jailer,
         jail: &super::jailer::Jail,
         boot: bool,
         guest_image_version: &str,
     ) -> std::io::Result<VmRecord> {
+        let (app_id, _) = identity;
         make_directory(&self.runtime_dir, RUNTIME_DIR_MODE)?;
         let api_socket = self.api_socket(app_id);
         let _ = std::fs::remove_file(&api_socket);
@@ -239,7 +256,7 @@ impl VmProcesses {
             command.arg("--config-file").arg("/firecracker.json");
         }
         jail.configure_command(&mut command)?;
-        self.launch(app_id, command, jail, guest_image_version).await
+        self.launch(identity, command, jail, guest_image_version).await
     }
 
     #[cfg(test)]
@@ -253,7 +270,7 @@ impl VmProcesses {
         let jail = super::jailer::Jail::for_testing(working_dir.into());
         let jailer = super::jailer::Jailer::for_testing(binary.into());
         self.spawn(
-            app_id,
+            (app_id, &crate::test_support::deployment_id()),
             binary,
             &jailer,
             &jail,
@@ -265,11 +282,12 @@ impl VmProcesses {
 
     async fn launch(
         &self,
-        app_id: &AppId,
+        identity: (&AppId, &protocol::DeploymentId),
         mut command: tokio::process::Command,
         jail: &super::jailer::Jail,
         guest_image_version: &str,
     ) -> std::io::Result<VmRecord> {
+        let (app_id, deployment_id) = identity;
         let working_dir = &jail.root;
         let console = std::fs::File::create(self.console_path(app_id))?;
         command
@@ -315,6 +333,7 @@ impl VmProcesses {
         let record = VmRecord {
             app_id: app_id.clone(),
             pid,
+            deployment_id: Some(deployment_id.clone()),
             host_boot_id: self.boot_id.clone(),
             started_at_ms: crate::clock::now_ms(),
             guest_image_version: Some(guest_image_version.to_string()),
@@ -416,6 +435,7 @@ mod tests {
             .write_record(&VmRecord {
                 app_id: app_id(),
                 pid: std::process::id() as i32,
+                deployment_id: None,
                 host_boot_id: "an-earlier-boot".into(),
                 started_at_ms: 0,
                 guest_image_version: None,
@@ -441,6 +461,7 @@ mod tests {
             .write_record(&VmRecord {
                 app_id: app_id(),
                 pid: std::process::id() as i32,
+                deployment_id: None,
                 host_boot_id: "boot-1".into(),
                 started_at_ms: 0,
                 guest_image_version: None,
@@ -464,6 +485,7 @@ mod tests {
         let record = VmRecord {
             app_id: app_id(),
             pid: 1,
+            deployment_id: None,
             host_boot_id: "boot-1".into(),
             started_at_ms: 0,
             guest_image_version: None,
@@ -554,6 +576,7 @@ mod tests {
             .write_record(&VmRecord {
                 app_id: app_id(),
                 pid: 1,
+                deployment_id: None,
                 host_boot_id: "boot-1".into(),
                 started_at_ms: 0,
                 guest_image_version: None,
@@ -768,6 +791,7 @@ mod tests {
             .write_record(&VmRecord {
                 app_id: app_id(),
                 pid: -1,
+                deployment_id: None,
                 host_boot_id: "boot-1".into(),
                 started_at_ms: 0,
                 guest_image_version: None,

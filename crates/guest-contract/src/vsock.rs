@@ -9,6 +9,8 @@ pub const CRON_REGISTRATION_PORT: u32 = 51003;
 pub const CRON_EXECUTION_PORT: u32 = 51004;
 
 pub const IDENTITY_PORT: u32 = 51005;
+pub const SIGN_IN_EMAIL_PORT: u32 = 51006;
+pub const MAX_SIGN_IN_EMAIL_FRAME: usize = 128;
 pub const MAX_IDENTITY_BYTES: usize = 16 * 1024;
 
 pub const GUEST_VSOCK_FILENAME: &str = "logs.vsock";

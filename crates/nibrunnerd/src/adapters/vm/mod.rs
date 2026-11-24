@@ -5,6 +5,7 @@ pub mod layers;
 pub(crate) mod limits;
 pub mod manager;
 pub mod process;
+pub(crate) mod sign_in_email;
 pub mod snapshot;
 mod startup;
 pub mod status;

@@ -46,6 +46,7 @@ pub struct VmManager {
     pub network: Arc<dyn HostNetwork>,
     pub volumes: Arc<dyn VolumeBackend>,
     pub logs: Arc<TenantLogReceiver>,
+    pub(crate) sign_in_email: super::sign_in_email::SignInEmailService,
     pub(crate) identities: super::identity::Identities,
     pub cron_registration: Arc<crate::adapters::cron_registration::CronRegistrationReceiver>,
     pub sink: Arc<dyn LogSink>,
@@ -279,6 +280,17 @@ impl VmManager {
         )
         .await?;
         let granted = async {
+            self.sign_in_email
+                .attach(
+                    &request.desired.app_id,
+                    &request.desired.deployment_id,
+                    &jail.root,
+                    jail.uid,
+                    jail.gid,
+                    self.processes.clone(),
+                )
+                .await
+                .map_err(|error| VmError::Host(error.to_string()))?;
             jail.grant_socket(&tenant_log_socket_path(&jail.root))
                 .map_err(|error| VmError::Host(error.to_string()))?;
             jail.grant_identity_socket()
@@ -292,6 +304,7 @@ impl VmManager {
         }
         .await;
         if let Err(error) = granted {
+            self.sign_in_email.detach(&request.desired.app_id).await;
             self.cron_registration.detach(&request.desired.app_id).await;
             self.logs.detach(&request.desired.app_id).await;
             return Err(error);
@@ -309,6 +322,7 @@ impl VmManager {
                 "a running microVM cannot have its jail rebuilt".into(),
             ));
         }
+        self.sign_in_email.detach(app_id).await;
         self.identities.detach(app_id).await;
         self.logs.detach(app_id).await;
         self.cron_registration.detach(app_id).await;
@@ -485,12 +499,14 @@ impl VmManager {
         }
         .await;
         if outcome.is_ok() {
+            self.sign_in_email.detach(&request.app_id).await;
             self.processes.stop(&request.app_id).await;
         } else {
             self.discard_snapshot(&request.app_id);
         }
         if let Some(memory) = memory.as_mut() {
             if let Err(error) = memory.restore() {
+                self.sign_in_email.detach(&request.app_id).await;
                 self.processes.stop(&request.app_id).await;
                 return Err(VmError::Host(format!(
                     "the VM's memory ceiling could not be restored: {error}"
@@ -575,7 +591,7 @@ impl Vmm for VmManager {
         let started = self
             .processes
             .spawn(
-                &app_id,
+                (&app_id, &request.desired.deployment_id),
                 &self.firecracker,
                 &self.jailer,
                 &prepared.jail,
@@ -584,6 +600,7 @@ impl Vmm for VmManager {
             )
             .await;
         if let Err(error) = started {
+            self.sign_in_email.detach(&app_id).await;
             self.cron_registration.detach(&app_id).await;
             let _ = self.logs.detach(&app_id).await;
             return Err(VmError::Host(error.to_string()));
@@ -598,6 +615,7 @@ impl Vmm for VmManager {
         {
             let error = self.startup_failure(&app_id, error);
             self.processes.stop(&app_id).await;
+            self.sign_in_email.detach(&app_id).await;
             self.cron_registration.detach(&app_id).await;
             self.logs.detach(&app_id).await;
             return Err(error);
@@ -722,7 +740,8 @@ impl Vmm for VmManager {
         let _ = std::fs::remove_file(&paths.stamp_path);
         let jail = self.prepare_jail(&request.app_id).await?;
         let jailed_at = Instant::now();
-        self.readopt(&request.app_id).await?;
+        self.attach_channels(&request.app_id, &request.deployment_id, &jail.root)
+            .await?;
         jail.grant_socket(&tenant_log_socket_path(&jail.root))
             .map_err(|error| VmError::Host(error.to_string()))?;
         jail.grant_identity_socket()
@@ -747,10 +766,21 @@ impl Vmm for VmManager {
         let prepared_at = Instant::now();
         let state_path = PathBuf::from("/snapshots/state");
         let memory_path = PathBuf::from("/snapshots/memory");
+        self.sign_in_email
+            .attach(
+                &request.app_id,
+                &request.deployment_id,
+                &jail.root,
+                jail.uid,
+                jail.gid,
+                self.processes.clone(),
+            )
+            .await
+            .map_err(|error| VmError::Host(error.to_string()))?;
         let started = self
             .processes
             .spawn(
-                &request.app_id,
+                (&request.app_id, &request.deployment_id),
                 &self.firecracker,
                 &self.jailer,
                 &jail,
@@ -779,6 +809,7 @@ impl Vmm for VmManager {
         };
         let cleanup_started_at = Instant::now();
         if outcome.is_err() {
+            self.sign_in_email.detach(&request.app_id).await;
             self.processes.stop(&request.app_id).await;
         }
         self.discard_snapshot(&request.app_id);
@@ -819,6 +850,7 @@ impl Vmm for VmManager {
     }
 
     async fn stop(&self, app_id: &AppId) -> Result<(), VmError> {
+        self.sign_in_email.detach(app_id).await;
         self.discard_snapshot(app_id);
         self.processes.stop(app_id).await;
         Ok(())
@@ -827,6 +859,7 @@ impl Vmm for VmManager {
     async fn discard(&self, app_id: &AppId) -> Result<(), VmError> {
         self.discard_snapshot(app_id);
         self.processes.forget(app_id);
+        self.sign_in_email.detach(app_id).await;
         self.identities.detach(app_id).await;
         self.logs.detach(app_id).await;
         self.cron_registration.detach(app_id).await;
@@ -887,18 +920,20 @@ impl Vmm for VmManager {
                     .map_err(|error| VmError::Host(error.to_string()))?;
             }
         }
-        if self
-            .processes
-            .read_record(app_id)
-            .is_some_and(|record| record.jail_root.is_some())
-        {
-            use std::os::unix::fs::MetadataExt;
-            let owner = std::fs::metadata(&working_dir).map_err(|error| VmError::Host(error.to_string()))?;
-            for socket in [
-                tenant_log_socket_path(&working_dir),
-                cron_registration_socket_path(&working_dir),
-            ] {
-                crate::unix_socket::own(&socket, owner.uid(), owner.gid())
+        if let Some(launch) = self.processes.read_record(app_id) {
+            if let (Some(jail), Some(deployment)) = (launch.jail_root, launch.deployment_id) {
+                use std::os::unix::fs::MetadataExt;
+                let owner = std::fs::metadata(&jail).map_err(|error| VmError::Host(error.to_string()))?;
+                self.sign_in_email
+                    .attach(
+                        app_id,
+                        &deployment,
+                        &jail,
+                        owner.uid(),
+                        owner.gid(),
+                        self.processes.clone(),
+                    )
+                    .await
                     .map_err(|error| VmError::Host(error.to_string()))?;
             }
         }
@@ -1195,6 +1230,7 @@ mod tests {
                 ),
             )),
             logs: TenantLogReceiver::new(),
+            sign_in_email: super::super::sign_in_email::SignInEmailService::disabled(),
             identities: super::super::identity::Identities::new(root.join("identities"), root.join("roles")),
             cron_registration: crate::adapters::cron_registration::CronRegistrationReceiver::new(Arc::new(
                 crate::domain::cron::registry::CronRegistry::new(
@@ -1328,7 +1364,7 @@ mod tests {
             .manager
             .processes
             .spawn(
-                &app_id(),
+                (&app_id(), &deployment_id()),
                 &fixture.manager.firecracker,
                 &fixture.manager.jailer,
                 &super::super::jailer::Jail::for_testing(working_dir.clone()),
@@ -1879,6 +1915,7 @@ mod tests {
             .write_record(&crate::adapters::vm::process::VmRecord {
                 app_id: app_id(),
                 pid: std::process::id() as i32,
+                deployment_id: None,
                 host_boot_id: fixture.manager.processes.boot_id().into(),
                 started_at_ms: 0,
                 guest_image_version: None,
@@ -1907,18 +1944,42 @@ mod tests {
     #[tokio::test]
     async fn a_recorded_jail_is_readopted_using_its_existing_identity() {
         use std::os::unix::fs::MetadataExt;
-        let fixture = fixture();
+        let mut fixture = fixture();
         let short_directory = tempfile::tempdir_in("/tmp").unwrap();
         let root = super::super::jailer::root(short_directory.path(), &app_id());
         make_directory(&root, VM_DIR_MODE).unwrap();
         let identity = std::fs::metadata(&root).unwrap();
-        fixture.state.put_record(instance_record(|_| {})).await;
+        let credential = short_directory.path().join("sign-in-email.toml");
+        std::fs::write(
+            &credential,
+            "host='localhost'\nusername='test'\npassword='test'\nsender='mail@example.org'",
+        )
+        .unwrap();
+        let cache = Arc::new(tokio::sync::Mutex::new(crate::desired::DesiredStateCache::new()));
+        fixture.manager.sign_in_email =
+            super::super::sign_in_email::SignInEmailService::from_file(&credential, cache.clone());
+        let new_deployment = protocol::DeploymentId::parse("dep-new").unwrap();
+        fixture
+            .state
+            .put_record(instance_record(|record| {
+                record.deployment_id = new_deployment.clone()
+            }))
+            .await;
+        cache.lock().await.accept(crate::test_support::desired_state(|s| {
+            s.instances = vec![desired_instance(|i| {
+                i.deployment_id = new_deployment;
+                i.sign_in_email = Some(protocol::SignInEmail {
+                    recipient: protocol::SignInMailbox::parse("owner@example.org").unwrap(),
+                });
+            })]
+        }));
         fixture
             .manager
             .processes
             .write_record(&crate::adapters::vm::process::VmRecord {
                 app_id: app_id(),
                 pid: std::process::id() as i32,
+                deployment_id: Some(deployment_id()),
                 host_boot_id: fixture.manager.processes.boot_id().into(),
                 started_at_ms: 0,
                 guest_image_version: None,
@@ -1939,6 +2000,18 @@ mod tests {
             assert_eq!((owner.uid(), owner.gid()), (identity.uid(), identity.gid()));
             assert!(tokio::net::UnixStream::connect(socket).await.is_ok());
         }
+        // A surviving old guest cannot acquire the new deployment's binding on readoption.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mail = root.join(format!(
+            "{}_{}",
+            guest_contract::vsock::GUEST_VSOCK_FILENAME,
+            guest_contract::vsock::SIGN_IN_EMAIL_PORT
+        ));
+        let mut socket = tokio::net::UnixStream::connect(&mail).await.unwrap();
+        socket.write_all(b"{\"code\":\"012345\"}\n").await.unwrap();
+        let mut reply = String::new();
+        socket.read_to_string(&mut reply).await.unwrap();
+        assert_eq!(reply, "{\"status\":\"disabled\"}\n");
     }
 
     #[tokio::test]
@@ -2156,6 +2229,7 @@ mod tests {
             .write_record(&crate::adapters::vm::process::VmRecord {
                 app_id: app_id(),
                 pid: 1,
+                deployment_id: None,
                 host_boot_id: fixture.manager.processes.boot_id().into(),
                 started_at_ms: 0,
                 guest_image_version: None,
@@ -2194,6 +2268,7 @@ mod tests {
                 .write_record(&crate::adapters::vm::process::VmRecord {
                     app_id: app_id(),
                     pid: -1,
+                    deployment_id: None,
                     host_boot_id: fixture.manager.processes.boot_id().into(),
                     started_at_ms: 0,
                     guest_image_version: boot_image.map(str::to_string),

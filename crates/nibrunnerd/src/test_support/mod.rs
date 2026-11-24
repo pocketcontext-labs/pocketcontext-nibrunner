@@ -160,6 +160,7 @@ pub fn desired_instance(edit: impl FnOnce(&mut DesiredInstance)) -> DesiredInsta
         layers: vec![layer(|_| {})],
         config: app_config(|_| {}),
         hostnames: vec![],
+        sign_in_email: None,
         access: AccessPolicy::Public,
     };
     edit(&mut value);
@@ -512,7 +513,7 @@ async fn test_host_over(
         guest_image_version: "6.1.180-test".to_string(),
         state: state.clone(),
         allocator: Arc::new(Mutex::new(SlotAllocator::addressing(config.max_apps))),
-        cache: Mutex::new(DesiredStateCache::new()),
+        cache: Arc::new(Mutex::new(DesiredStateCache::new())),
         vms,
         logs,
         volumes: Arc::new(LocalFileVolumes::new(

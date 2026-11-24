@@ -233,6 +233,13 @@ validated_string!(
     }
 );
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SignInEmail {
+    pub recipient: SignInMailbox,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(!try_from, transform = desired_instance_rules))]
@@ -261,6 +268,9 @@ pub struct DesiredInstance {
     pub hostnames: Vec<AppHostname>,
     /// The access policy for every HTTP hostname.
     pub access: AccessPolicy,
+    /// Submit six-digit sign-in codes to this mailbox through the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in_email: Option<SignInEmail>,
 }
 
 impl DesiredInstance {
@@ -296,6 +306,7 @@ struct DesiredInstanceFields {
     config: AppConfig,
     hostnames: Vec<AppHostname>,
     access: AccessPolicy,
+    sign_in_email: Option<SignInEmail>,
 }
 
 impl TryFrom<DesiredInstanceFields> for DesiredInstance {
@@ -337,6 +348,7 @@ impl TryFrom<DesiredInstanceFields> for DesiredInstance {
             config: fields.config,
             hostnames: fields.hostnames,
             access: fields.access,
+            sign_in_email: fields.sign_in_email,
         })
     }
 }
