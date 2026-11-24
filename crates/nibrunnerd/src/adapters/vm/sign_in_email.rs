@@ -9,6 +9,7 @@ use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::{Credentials, Mechanism};
 use lettre::transport::smtp::client::{AsyncSmtpConnection, Certificate, TlsParameters};
 use lettre::transport::smtp::extension::ClientId;
+use lettre::transport::smtp::response::Severity;
 use lettre::Message;
 use protocol::{AppId, DeploymentId, DesiredInstanceState, SignInMailbox};
 use serde::Deserialize;
@@ -218,7 +219,11 @@ impl Delivery {
         if self.recipient(guest).await.as_ref() != Some(&recipient) {
             return "disabled";
         }
-        if smtp.send(message.envelope(), &message.formatted()).await.is_ok() {
+        if smtp
+            .send(message.envelope(), &message.formatted())
+            .await
+            .is_ok_and(|reply| reply.code().severity == Severity::PositiveCompletion)
+        {
             "accepted"
         } else {
             "temporarily_unavailable"

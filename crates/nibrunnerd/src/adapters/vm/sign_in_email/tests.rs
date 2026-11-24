@@ -86,6 +86,8 @@ async fn smtp_sink() -> Sink {
                             "timeout"
                         } else if message.contains("code is 333333.") {
                             ""
+                        } else if message.contains("code is 555555.") {
+                            "354 continue"
                         } else {
                             "250 accepted"
                         };
@@ -242,7 +244,7 @@ async fn jail_and_applied_deployment_select_the_only_mailbox_and_submission_is_n
         )));
         assert!(!mail.message.contains("http"));
     }
-    for code in ["222222", "333333", "444444"] {
+    for code in ["222222", "333333", "444444", "555555"] {
         assert_eq!(
             request(&a, format!("{{\"code\":\"{code}\"}}\n").as_bytes()).await,
             "temporarily_unavailable"
@@ -250,7 +252,7 @@ async fn jail_and_applied_deployment_select_the_only_mailbox_and_submission_is_n
         assert!(sink.messages.recv().await.unwrap().message.contains(code));
     }
     let submitted = sink.connections.load(Ordering::Relaxed);
-    assert_eq!(submitted, 5);
+    assert_eq!(submitted, 6);
     desired.instances[0].sign_in_email = None;
     desired.instances[1].deployment_id = DeploymentId::parse("replaced").unwrap();
     cache.lock().await.accept(desired.clone());
