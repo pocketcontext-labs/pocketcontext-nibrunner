@@ -56,6 +56,8 @@ pub struct InstanceRecord {
     pub restart_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_restart: Option<ReportedRestart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_hook: Option<protocol::ReportedHook>,
     #[serde(default)]
     pub stop_requested: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,6 +120,7 @@ impl InstanceRecord {
             on_request: fields.on_request,
             start_attempts: NO_START_ATTEMPTS,
             restart_count: 0,
+            last_hook: None,
             last_restart: None,
             stop_requested: false,
             started_at: None,
@@ -128,6 +131,9 @@ impl InstanceRecord {
     }
 
     pub fn adopt(&mut self, fields: RecordFields) {
+        if self.deployment_id != fields.deployment_id {
+            self.last_hook = None;
+        }
         self.deployment_id = fields.deployment_id;
         self.volume_id = fields.volume_id;
         self.hostnames = fields.hostnames;

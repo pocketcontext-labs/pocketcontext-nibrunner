@@ -168,12 +168,14 @@ impl HostState {
         change(&mut *self.snapshot.write().await)
     }
 
-    pub async fn put_record(&self, record: InstanceRecord) {
-        self.snapshot
-            .write()
-            .await
-            .records
-            .insert(record.app_id.clone(), record);
+    pub async fn put_record(&self, mut record: InstanceRecord) {
+        let mut snapshot = self.snapshot.write().await;
+        if let Some(previous) = snapshot.records.get(&record.app_id) {
+            if previous.deployment_id == record.deployment_id && previous.last_hook.is_some() {
+                record.last_hook.clone_from(&previous.last_hook);
+            }
+        }
+        snapshot.records.insert(record.app_id.clone(), record);
     }
 
     pub async fn update_record(&self, app_id: &AppId, change: impl FnOnce(&mut InstanceRecord)) {

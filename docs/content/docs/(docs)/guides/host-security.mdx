@@ -94,7 +94,7 @@ changing them after apps have started.
 ## Drop workload identity
 
 On a Drop development host, the issuer prepares a root-owned directory at
-`/run/drop-m1/identities/<appId>/` containing `role-arn` and a rotating OIDC JWT in
+`<source-directory>/<appId>/` containing `role-arn` and a rotating OIDC JWT in
 `token`. The issuer replaces the token file atomically. The host selects this directory from
 the app ID assigned to each Firecracker jail. Configure AWS trust for that app's issuer,
 audience and subject.
@@ -150,3 +150,5 @@ A disconnected node continues with its applied state, including after a daemon r
 Fence the source before activating a move that requires exclusive delivery. The host
 admits five submissions per minute per app and per mailbox, counting failures too.
 Limits cover one daemon lifetime. At most 16 SMTP submissions run concurrently.
+
+The daemon reads rotating tokens from `NIBRUN_IDENTITY_SOURCE_DIR` when set in its service environment. The default source directory is `/run/drop-m1/identities`.

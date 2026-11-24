@@ -680,3 +680,55 @@ async fn a_ready_guest_reports_its_kernel_init_and_first_exec_checkpoints() {
     .expect("the host records guest startup phases after observing readiness");
     host.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_hooks_flush_before_snapshot_and_replacement_and_resume_after_wake() {
+    use protocol::{GuestPort, HookEvent, HookOutcome, LifecycleHooks};
+
+    let Some(host) = crate::host().await else { return };
+    let app = host.tenant(1).on_request(60_000).edited(|instance| {
+        instance.config.hooks = Some(LifecycleHooks {
+            port: GuestPort::new(8081).unwrap(),
+        });
+    });
+    host.deploy(std::slice::from_ref(&app)).await;
+    host.until_state(&app.app_id, InstanceState::Running).await;
+    host.let_sleep(&app).await;
+    let hook = host.instance(&app.app_id).await.unwrap().last_hook.unwrap();
+    assert_eq!((hook.event, hook.outcome), (HookEvent::Suspend, HookOutcome::Ok));
+    assert_eq!(host.get(&app, "/").await.unwrap().status, 200);
+    host.until("the guest to acknowledge resume", |r| {
+        r.instances.iter().any(|i| {
+            i.last_hook
+                .as_ref()
+                .is_some_and(|h| h.event == HookEvent::Resume && h.outcome == HookOutcome::Ok)
+        })
+    })
+    .await;
+    let replacement = app.clone().redeployed("replacement");
+    host.deploy(std::slice::from_ref(&replacement)).await;
+    host.until("the replacement to serve", |r| {
+        r.instances.iter().any(|i| {
+            i.deployment_id == replacement.instance.deployment_id && i.state == InstanceState::Running
+        })
+    })
+    .await;
+    assert_eq!(
+        host.get(&replacement, "/read?path=lifecycle-events")
+            .await
+            .unwrap()
+            .body,
+        "suspend\nresume\nterminate\n"
+    );
+    let stopped = replacement
+        .clone()
+        .edited(|i| i.desired_state = DesiredInstanceState::Stopped);
+    host.deploy(&[stopped]).await;
+    host.until_state(&app.app_id, InstanceState::Stopped).await;
+    let hook = host.instance(&app.app_id).await.unwrap().last_hook.unwrap();
+    assert_eq!(
+        (hook.event, hook.outcome),
+        (HookEvent::Terminate, HookOutcome::Ok)
+    );
+    host.stop().await;
+}

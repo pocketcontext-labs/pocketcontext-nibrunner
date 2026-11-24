@@ -15,6 +15,7 @@ pub fn to_reported_instance(record: &InstanceRecord) -> ReportedInstance {
         guest_ipv4: record.guest_ipv4.clone(),
         layer_digests: record.layer_digests.clone(),
         restart_count: record.restart_count,
+        last_hook: record.last_hook.clone(),
         last_restart: record.last_restart.clone(),
         started_at: record.started_at.clone(),
         converged_at: record.converged_at.clone(),

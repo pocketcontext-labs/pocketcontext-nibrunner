@@ -1,0 +1,18 @@
+---
+title: Lifecycle hooks
+description: Let a guest drain and flush its state across VM lifecycle transitions.
+---
+
+Set `config.hooks.port` to a private guest TCP port, for example `8081`. Choose a port distinct from the HTTP port and every raw port. The host connects directly to the guest slot address. The proxy and raw-port relay do not publish this listener.
+
+The guest receives `NIBRUN_HOOK_PORT` and `NIBRUN_HOOK_TOKEN`. Listen on the guest interface and require the exact token in the HTTP `Authorization: Bearer` header on every hook. Keep the token out of logs. The host retains its copy in the root-only app staging directory across daemon restarts and snapshot restores.
+
+| Request | Timing |
+| --- | --- |
+| `POST /hooks/suspend` | Before the volume flush and tenant freeze. Drain outstanding writes and flush application state. |
+| `POST /hooks/resume` | After snapshot restore, clock synchronization and tenant release. Also sent when a refused sleep successfully returns the tenant to service. The wake request can proceed while the hook runs. |
+| `POST /hooks/terminate` | Before a running guest is stopped, removed or replaced. Finish the final flush before responding. |
+
+Return a 2xx response after the requested work finishes. The host sends one request per notification. Delivery requires a running guest whose launch deployment matches the applied instance. Sleeping guests receive no request until they wake.
+
+The default timeout is 10 seconds. Set `lifecycle_hook_timeout_seconds` in the host configuration to change it. A failure or timeout during suspend or terminate is recorded and the transition continues. The instance in `reported.json` includes `lastHook` with the event, outcome (`ok`, `error`, `timeout` or `unreachable`), completion time and duration in milliseconds. Guest response bodies and credentials stay out of the report.

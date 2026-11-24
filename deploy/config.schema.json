@@ -29,6 +29,13 @@
       "description": "Explicitly managed whole-device storage for snapshots and ZeroFS caches. Absent leaves\nmounting to the operator. Devices without filesystem signatures are initialized,\ndiscarding any unrecognized raw contents.",
       "$ref": "#/$defs/host_storage"
     },
+    "lifecycle_hook_timeout_seconds": {
+      "description": "Maximum duration of a guest lifecycle hook, in seconds. Defaults to 10.",
+      "type": "integer",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 1
+    },
     "logs": {
       "description": "Absent keeps the newest 256 MiB of each app's output.",
       "$ref": "#/$defs/logs"

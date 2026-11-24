@@ -18,6 +18,7 @@ pub struct InstanceEnvContent<'a> {
     pub layers: usize,
     pub hostnames: &'a [AppHostname],
     pub workload_role: Option<&'a str>,
+    pub hooks: Option<(protocol::GuestPort, &'a protocol::SecretString)>,
     pub program: &'a GuestPath,
     pub working_directory: &'a GuestPath,
     pub args: &'a TenantArguments,
@@ -57,6 +58,15 @@ pub fn render_instance_env(content: &InstanceEnvContent<'_>) -> Result<String, U
         format!("{RUNTIME_PREFIX}PROGRAM={}", content.program),
         format!("{RUNTIME_PREFIX}CWD={}", content.working_directory),
     ];
+    if let Some((port, token)) = content.hooks {
+        if has_forbidden_character(token.expose()) {
+            return Err(UnrepresentableEnvironment {
+                variable_name: "NIBRUN_HOOK_TOKEN".into(),
+            });
+        }
+        lines.push(format!("NIBRUN_HOOK_PORT={port}"));
+        lines.push(format!("NIBRUN_HOOK_TOKEN={}", token.expose()));
+    }
     if let Some(role) = content.workload_role {
         if has_forbidden_character(role) {
             return Err(UnrepresentableEnvironment {
@@ -233,6 +243,12 @@ pub fn parse_instance_env(text: &str) -> Result<InstanceConfig, InstanceEnvError
         environment.push((name.clone(), expand(name, value, &runtime)?));
     }
 
+    if let (Some(port), Some(token)) = (named("NIBRUN_HOOK_PORT"), named("NIBRUN_HOOK_TOKEN")) {
+        environment.retain(|(key, _)| key != "NIBRUN_HOOK_PORT" && key != "NIBRUN_HOOK_TOKEN");
+        environment.push(("NIBRUN_HOOK_PORT".into(), port.clone()));
+        environment.push(("NIBRUN_HOOK_TOKEN".into(), token.clone()));
+    }
+
     Ok(InstanceConfig {
         http_port: number("NIBRUN_HTTP_PORT")?,
         layers: number("NIBRUN_LAYERS")? as usize,
@@ -301,6 +317,7 @@ mod tests {
 
     struct Overrides {
         workload_role: Option<&'static str>,
+        hook_token: Option<protocol::SecretString>,
         http_port: HttpPort,
         hostnames: Vec<AppHostname>,
         args: Vec<String>,
@@ -311,6 +328,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 workload_role: None,
+                hook_token: None,
                 http_port: DEFAULT_HTTP_PORT,
                 hostnames: vec![hostname(PLATFORM_HOSTNAME, AppHostnameKind::Platform)],
                 args: vec![],
@@ -322,6 +340,10 @@ mod tests {
     fn attempt(overrides: Overrides) -> Result<String, UnrepresentableEnvironment> {
         let args = TenantArguments::try_from(overrides.args).unwrap();
         render_instance_env(&InstanceEnvContent {
+            hooks: overrides
+                .hook_token
+                .as_ref()
+                .map(|token| (protocol::GuestPort::new(8081).unwrap(), token)),
             workload_role: overrides.workload_role,
             http_port: overrides.http_port,
             layers: 1,
@@ -336,6 +358,28 @@ mod tests {
 
     fn render(overrides: Overrides) -> String {
         attempt(overrides).unwrap()
+    }
+
+    #[test]
+    fn hooks_reach_the_tenant_with_the_host_selected_port_and_token() {
+        let rendered = render(Overrides {
+            hook_token: Some(protocol::SecretString::parse("test-bearer").unwrap()),
+            environment: environment(&[("NIBRUN_HOOK_TOKEN", "tenant-value"), ("NIBRUN_HOOK_PORT", "1")]),
+            ..Default::default()
+        });
+        let config = parse_instance_env(&rendered).unwrap();
+        let env = config.tenant_environment();
+        let hooks: Vec<_> = env
+            .iter()
+            .filter(|(key, _)| key.starts_with("NIBRUN_HOOK_"))
+            .collect();
+        assert_eq!(
+            hooks,
+            vec![
+                &("NIBRUN_HOOK_PORT".into(), "8081".into()),
+                &("NIBRUN_HOOK_TOKEN".into(), "test-bearer".into())
+            ]
+        );
     }
 
     #[test]
@@ -505,6 +549,7 @@ mod both_ends {
             kind: AppHostnameKind::Platform,
         }];
         render_instance_env(&InstanceEnvContent {
+            hooks: None,
             workload_role: None,
             http_port: DEFAULT_HTTP_PORT,
             layers: 2,

@@ -133,6 +133,7 @@ pub const TCP_HEALTH_CHECK: HealthCheck = HealthCheck::Tcp {
 
 pub fn app_config(edit: impl FnOnce(&mut AppConfig)) -> AppConfig {
     let mut value = AppConfig {
+        hooks: None,
         ports: vec![],
         http_port: DEFAULT_HTTP_PORT,
         command: Command {
@@ -226,6 +227,7 @@ pub fn reported_instance(edit: impl FnOnce(&mut ReportedInstance)) -> ReportedIn
         guest_ipv4: None,
         layer_digests: Vec::new(),
         restart_count: 0,
+        last_hook: None,
         last_restart: None,
         started_at: None,
         converged_at: None,

@@ -232,6 +232,7 @@ pub struct HostStorage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostConfig {
+    pub lifecycle_hook_timeout_seconds: std::num::NonZeroU16,
     pub max_concurrent_vm_starts: std::num::NonZeroU16,
     /// How many apps this host is laid out for. Everything that counts slots follows from it —
     /// the ring the allocator walks, the loopback ports reserved, the nbd minors the module is
@@ -340,6 +341,9 @@ mod file {
         /// and ports; `start` says the three against what is set.
         #[schemars(range(min = 1, max = nft_render::most_apps_the_ports_fit()))]
         pub(super) max_apps: Option<u32>,
+        /// Maximum duration of a guest lifecycle hook, in seconds. Defaults to 10.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(super) lifecycle_hook_timeout_seconds: Option<std::num::NonZeroU16>,
         /// Host-wide bound on simultaneous VM boots and snapshot restores. Required, from 1 to 65535.
         /// `install` writes 2; changing it requires `nibrunnerd start`.
         pub(super) max_concurrent_vm_starts: Option<std::num::NonZeroU16>,
@@ -807,6 +811,9 @@ impl HostConfig {
         let logs = logs(document.logs.as_ref())?;
 
         let config = Self {
+            lifecycle_hook_timeout_seconds: document
+                .lifecycle_hook_timeout_seconds
+                .unwrap_or(std::num::NonZeroU16::new(10).expect("a positive timeout")),
             max_concurrent_vm_starts: required(
                 "max_concurrent_vm_starts",
                 document.max_concurrent_vm_starts,
@@ -937,6 +944,7 @@ impl HostConfig {
             metrics: None,
             filesystem: None,
             guest_connections: None,
+            lifecycle_hook_timeout_seconds: std::num::NonZeroU16::new(10).expect("a positive timeout"),
             max_concurrent_vm_starts: std::num::NonZeroU16::new(2).expect("a positive start limit"),
             logs: LogsConfig::default(),
             export_store_url: state_dir.join("export-store").display().to_string(),
@@ -1028,6 +1036,7 @@ impl HostConfig {
             guest_connections: Some(GuestConnectionsConfig {
                 socket: PathBuf::from("/run/nibrunner/guest-connections.sock"),
             }),
+            lifecycle_hook_timeout_seconds: std::num::NonZeroU16::new(10).expect("a positive timeout"),
             max_concurrent_vm_starts: std::num::NonZeroU16::new(2).expect("a positive start limit"),
             logs: LogsConfig::default(),
             export_store_url: "s3://nibrunner-exports-eu-west-2-123456789012/exports".to_string(),
@@ -1147,6 +1156,7 @@ impl HostConfig {
                 .map(|connection| file::GuestConnections {
                     socket: text(&connection.socket),
                 }),
+            lifecycle_hook_timeout_seconds: Some(self.lifecycle_hook_timeout_seconds),
             max_concurrent_vm_starts: Some(self.max_concurrent_vm_starts),
             logs: Some(file::Logs {
                 keep_mib_per_app: Some(self.logs.keep_bytes_per_app / BYTES_PER_MEBIBYTE),

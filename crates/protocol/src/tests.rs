@@ -579,6 +579,7 @@ fn a_report_keeps_unknown_compute_null_and_omits_unknown_optional_details() {
         guest_ipv4: None,
         layer_digests: Vec::new(),
         restart_count: 0,
+        last_hook: None,
         last_restart: None,
         started_at: None,
         converged_at: None,
@@ -999,6 +1000,7 @@ mod schema {
                     Sha256Digest::parse("a".repeat(64)).unwrap(),
                 ],
                 restart_count: 1,
+                last_hook: None,
                 last_restart: Some(ReportedRestart {
                     at: now.clone(),
                     restart: TenantRestart {

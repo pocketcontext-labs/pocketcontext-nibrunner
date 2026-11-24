@@ -42,6 +42,7 @@ pub struct VmManager {
     pub firecracker: PathBuf,
     pub(crate) jailer: super::jailer::Jailer,
     pub guest_image_version: String,
+    pub(crate) lifecycle_hooks: super::hooks::HookClient,
     pub processes: VmProcesses,
     pub network: Arc<dyn HostNetwork>,
     pub volumes: Arc<dyn VolumeBackend>,
@@ -178,7 +179,13 @@ impl VmManager {
             .then(|| self.identities.role_for(&request.desired.app_id))
             .transpose()
             .map_err(|error| VmError::Host(format!("the app has no configured workload role: {error}")))?;
+        let hooks = super::hooks::LaunchHooks::stage(
+            &working_dir,
+            &request.desired.deployment_id,
+            request.desired.config.hooks.as_ref().map(|hooks| hooks.port),
+        )?;
         let rendered = render_instance_env(&InstanceEnvContent {
+            hooks: hooks.as_ref().map(|h| (h.port, &h.token)),
             workload_role: workload_role.as_deref(),
             http_port: request.desired.config.http_port,
             layers: request.payload.layer_image_paths.len(),
@@ -435,6 +442,18 @@ impl VmManager {
         })
     }
 
+    async fn notify_guest(&self, app_id: &AppId, event: protocol::HookEvent) {
+        self.lifecycle_hooks
+            .call(
+                app_id,
+                event,
+                &self.vm_dir.join(app_id.as_str()),
+                &self.processes,
+                &self.state,
+            )
+            .await;
+    }
+
     async fn resume_frozen_tenant(&self, app_id: &AppId, control: &Path) {
         let recovered = async {
             self.api(app_id).resume().await?;
@@ -444,6 +463,8 @@ impl VmManager {
         if let Err(error) = recovered {
             tracing::error!(%app_id, error = %error.message(), "the tenant could not resume after a refused sleep");
             self.processes.stop(app_id).await;
+        } else {
+            self.notify_guest(app_id, protocol::HookEvent::Resume).await;
         }
     }
 
@@ -654,6 +675,8 @@ impl Vmm for VmManager {
         let api = self.api(&request.app_id);
 
         self.discard_snapshot(&request.app_id);
+        self.notify_guest(&request.app_id, protocol::HookEvent::Suspend)
+            .await;
         if let Err(error) = self.volumes.flush(&request.app_id).await {
             tracing::warn!(app_id = %request.app_id, error = %error.message(), "the volume backend would not flush");
         }
@@ -664,6 +687,9 @@ impl Vmm for VmManager {
         if let Err(error) = time_sync::freeze_tenant(&control).await {
             if let Err(recovery) = time_sync::wake(&control).await {
                 tracing::warn!(app_id = %request.app_id, error = %recovery.message(), "guest clock recovery failed after sleep refusal");
+            } else {
+                self.notify_guest(&request.app_id, protocol::HookEvent::Resume)
+                    .await;
             }
             return Err(error);
         }
@@ -817,6 +843,8 @@ impl Vmm for VmManager {
             let _ = std::fs::remove_file(exchange.join(name));
         }
         let (loaded_at, resume) = outcome?;
+        self.notify_guest(&request.app_id, protocol::HookEvent::Resume)
+            .await;
         let cleanup = cleanup_started_at.elapsed();
         let restored = restoring.elapsed();
         self.metrics.sleep_wake.restored(restored);
@@ -850,6 +878,7 @@ impl Vmm for VmManager {
     }
 
     async fn stop(&self, app_id: &AppId) -> Result<(), VmError> {
+        self.notify_guest(app_id, protocol::HookEvent::Terminate).await;
         self.sign_in_email.detach(app_id).await;
         self.discard_snapshot(app_id);
         self.processes.stop(app_id).await;
@@ -857,6 +886,7 @@ impl Vmm for VmManager {
     }
 
     async fn discard(&self, app_id: &AppId) -> Result<(), VmError> {
+        self.notify_guest(app_id, protocol::HookEvent::Terminate).await;
         self.discard_snapshot(app_id);
         self.processes.forget(app_id);
         self.sign_in_email.detach(app_id).await;
@@ -1218,6 +1248,7 @@ mod tests {
             firecracker: root.join("bin/firecracker"),
             jailer: super::super::jailer::Jailer::for_testing(root.join("bin/jailer")),
             guest_image_version: "6.1.180-test".into(),
+            lifecycle_hooks: super::super::hooks::HookClient::new(Duration::from_secs(10)),
             processes: VmProcesses::new(root.join("run")),
             network,
             volumes: Arc::new(LocalFileVolumes::new(

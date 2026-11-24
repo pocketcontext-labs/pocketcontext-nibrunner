@@ -286,6 +286,13 @@ pub struct Command {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct LifecycleHooks {
+    pub port: GuestPort,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     /// The guest port the HTTP proxy sends this app's hostnames to, and the one the health check
     /// probes.
@@ -293,6 +300,9 @@ pub struct AppConfig {
     /// What this app answers on besides `httpPort`, if anything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<InstancePort>,
+    /// Private port for host-initiated lifecycle notifications.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<LifecycleHooks>,
     pub command: Command,
     pub resources: InstanceResources,
     pub health_check: HealthCheck,
@@ -325,6 +335,9 @@ impl AppConfig {
     pub fn validate_ports(&self) -> Result<(), PortsInvalid> {
         let mut names = std::collections::BTreeSet::new();
         let mut guest_ports = std::collections::BTreeSet::new();
+        if let Some(hooks) = &self.hooks {
+            guest_ports.insert(hooks.port.get());
+        }
         for port in self.all_ports() {
             if !names.insert(port.name.as_str().to_string()) {
                 return Err(PortsInvalid::DuplicateName {

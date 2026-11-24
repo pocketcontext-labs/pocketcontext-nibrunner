@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026.11.15] - 2026-11-24
+
+### Features
+
+- Deliver deployment-bound guest lifecycle hooks
+- Send sign-in codes to deployment-bound mailboxes
+- Deliver workload credentials independently of guest readiness
+- Deliver app-bound OIDC identity before tenant start and resume
+- **protocol:** Recognize explicit customer volume storage (#369)
+
+### Fixes
+
+- Require a final SMTP acceptance for sign-in codes
+
+### Refactoring
+
+- **exports:** Open checkpoint readers through the owning volume backend (#368)
+- **volumes:** Identify the app whose filesystem must flush (#367)
+
 ## [2026.11.14] - 2026-11-19
 
 ### Features

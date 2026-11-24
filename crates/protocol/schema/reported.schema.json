@@ -236,6 +236,23 @@
         "measuredAt"
       ]
     },
+    "HookEvent": {
+      "type": "string",
+      "enum": [
+        "suspend",
+        "resume",
+        "terminate"
+      ]
+    },
+    "HookOutcome": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "error",
+        "timeout",
+        "unreachable"
+      ]
+    },
     "HostCapacity": {
       "type": "object",
       "properties": {
@@ -469,6 +486,31 @@
         "state"
       ]
     },
+    "ReportedHook": {
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "event": {
+          "$ref": "#/$defs/HookEvent"
+        },
+        "outcome": {
+          "$ref": "#/$defs/HookOutcome"
+        },
+        "time": {
+          "$ref": "#/$defs/Timestamp"
+        }
+      },
+      "required": [
+        "event",
+        "outcome",
+        "time",
+        "durationMs"
+      ]
+    },
     "ReportedInstance": {
       "type": "object",
       "properties": {
@@ -525,6 +567,16 @@
             "null"
           ],
           "format": "int32"
+        },
+        "lastHook": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReportedHook"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "lastRestart": {
           "description": "The last of those restarts. Absent until there has been one.",

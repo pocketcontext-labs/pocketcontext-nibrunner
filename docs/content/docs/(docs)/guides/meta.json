@@ -5,6 +5,7 @@
     "layers",
     "volumes",
     "sleep-and-wake",
+    "lifecycle-hooks",
     "cron-jobs",
     "health-checks",
     "https",

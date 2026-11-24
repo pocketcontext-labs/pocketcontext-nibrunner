@@ -72,6 +72,15 @@ fn main() {
         .and_then(|port| port.parse().ok())
         .unwrap_or(3000);
 
+    if let (Ok(port), Ok(token)) = (
+        std::env::var("NIBRUN_HOOK_PORT"),
+        std::env::var("NIBRUN_HOOK_TOKEN"),
+    ) {
+        let listener = TcpListener::bind(("0.0.0.0", port.parse::<u16>().unwrap())).unwrap();
+        let log = settings.data_dir.join("lifecycle-events");
+        std::fs::create_dir_all(&settings.data_dir).unwrap();
+        std::thread::spawn(move || receive_hooks(listener, &token, &log));
+    }
     if let Some(raw) = settings.raw_tcp {
         std::thread::spawn(move || echo_stream(raw));
     }
@@ -382,6 +391,46 @@ fn pty_opened() -> (&'static str, String) {
         "501 Not Implemented",
         "PTY allocation is only exercised on the Linux guest this tenant is deployed into".to_string(),
     )
+}
+
+fn receive_hooks(listener: TcpListener, token: &str, log: &Path) {
+    for stream in listener.incoming().flatten() {
+        let mut reader = BufReader::new(stream);
+        let mut request = String::new();
+        if reader.read_line(&mut request).is_err() {
+            continue;
+        }
+        let authorized = reader
+            .by_ref()
+            .lines()
+            .map_while(Result::ok)
+            .take_while(|s| !s.is_empty())
+            .any(|line| {
+                line.split_once(':').is_some_and(|(key, value)| {
+                    key.eq_ignore_ascii_case("authorization") && value.trim() == format!("Bearer {token}")
+                })
+            });
+        let event = request
+            .strip_prefix("POST /hooks/")
+            .and_then(|s| s.split_whitespace().next());
+        let status = match event {
+            Some(event @ ("suspend" | "resume" | "terminate")) if authorized => {
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(log)
+                    .unwrap();
+                writeln!(file, "{event}").unwrap();
+                file.sync_all().unwrap();
+                "204 No Content"
+            }
+            _ => "403 Forbidden",
+        };
+        let _ = write!(
+            reader.get_mut(),
+            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+    }
 }
 
 fn echo_stream(port: u16) {

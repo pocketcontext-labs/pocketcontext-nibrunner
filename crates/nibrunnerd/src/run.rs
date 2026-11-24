@@ -143,6 +143,9 @@ pub async fn build_host(
         guest_image_version: guest_image_version.clone(),
         firecracker,
         jailer,
+        lifecycle_hooks: crate::adapters::vm::hooks::HookClient::new(std::time::Duration::from_secs(
+            u64::from(config.lifecycle_hook_timeout_seconds.get()),
+        )),
         processes,
         network,
         volumes: volumes.clone(),
@@ -152,7 +155,9 @@ pub async fn build_host(
             cache.clone(),
         ),
         identities: crate::adapters::vm::identity::Identities::new(
-            "/run/drop-m1/identities".into(),
+            std::env::var_os("NIBRUN_IDENTITY_SOURCE_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| "/run/drop-m1/identities".into()),
             "/etc/nibrunner/workload-identity".into(),
         ),
         sink,

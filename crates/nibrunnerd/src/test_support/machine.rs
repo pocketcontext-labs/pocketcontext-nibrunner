@@ -293,6 +293,7 @@ impl RunningHost {
                     destination_path: ExecutablePath::parse("/app/tenant").expect("a path"),
                 }],
                 config: AppConfig {
+                    hooks: None,
                     ports: vec![],
                     http_port: DEFAULT_HTTP_PORT,
                     command: Command {

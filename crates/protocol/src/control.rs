@@ -479,6 +479,35 @@ pub struct ReportedRestart {
     pub restart: TenantRestart,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum HookEvent {
+    Suspend,
+    Resume,
+    Terminate,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum HookOutcome {
+    Ok,
+    Error,
+    Timeout,
+    Unreachable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReportedHook {
+    pub event: HookEvent,
+    pub outcome: HookOutcome,
+    pub time: Timestamp,
+    pub duration_ms: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
@@ -505,6 +534,8 @@ pub struct ReportedInstance {
     /// The last of those restarts. Absent until there has been one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_restart: Option<ReportedRestart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_hook: Option<ReportedHook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
     /// When the instance first became what the document asks of it, for the `deploymentId` and

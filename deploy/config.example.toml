@@ -13,6 +13,7 @@
 # host.env beside this file, which `install` creates empty and never writes into.
 
 max_apps = 1000
+lifecycle_hook_timeout_seconds = 10
 max_concurrent_vm_starts = 2
 
 [cron]
