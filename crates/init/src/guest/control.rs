@@ -38,10 +38,10 @@ pub(crate) fn serve() -> ! {
         }
     }
     let mut frozen_until = None;
-    let mut refresh_at = identity::enabled().then(|| Instant::now() + identity::REFRESH_INTERVAL);
+    let mut refresh_at = identity::synchronous().then(|| Instant::now() + identity::REFRESH_INTERVAL);
     loop {
         if frozen_until.is_some_and(|deadline| Instant::now() >= deadline) {
-            if identity::refresh()
+            if identity::before_release()
                 .and_then(|()| std::fs::write(TENANT_FREEZE, "0"))
                 .is_err()
             {
@@ -165,10 +165,7 @@ fn freeze_tenant() -> std::io::Result<()> {
 fn synchronize_clock(wire: &mut BufReader<std::fs::File>) -> std::io::Result<()> {
     let nanos = crate::clock_sync::host_time(wire)?;
     set_clock(nanos)?;
-    identity::refresh()?;
-    if identity::enabled() {
-        log("workload identity refreshed before tenant release");
-    }
+    identity::before_release()?;
     std::fs::write(TENANT_FREEZE, "0")?;
     writeln!(
         wire.get_mut(),

@@ -14,11 +14,20 @@ use nix::sys::time::{TimeVal, TimeValLike};
 const DIRECTORY: &str = "/run/drop-identity";
 const FILE: &str = "/run/drop-identity/token";
 const STAGED: &str = "/run/drop-identity/.next";
-static ROLE: OnceLock<String> = OnceLock::new();
+struct Identity {
+    role: String,
+    background: bool,
+}
+
+static IDENTITY: OnceLock<Identity> = OnceLock::new();
 pub(super) const REFRESH_INTERVAL: Duration = Duration::from_secs(15);
 
-pub(super) fn enabled() -> bool {
-    ROLE.get().is_some()
+pub(super) fn synchronous() -> bool {
+    IDENTITY.get().is_some_and(|id| !id.background)
+}
+
+pub(super) fn asynchronous() -> bool {
+    IDENTITY.get().is_some_and(|id| id.background)
 }
 
 fn receive() -> io::Result<(String, String)> {
@@ -52,24 +61,36 @@ fn install_token(token: &str) -> io::Result<()> {
 }
 
 pub(super) fn prepare(config: &mut InstanceConfig) -> io::Result<()> {
-    if !config
+    let mode = config
         .environment
         .iter()
-        .any(|(key, value)| key == "AWS_WORKLOAD_IDENTITY" && value == "1")
-    {
-        return Ok(());
-    }
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let (role, token) = loop {
-        match receive() {
-            Ok(frame) => break frame,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-            Err(error) => return Err(error),
+        .find(|(key, _)| key == "AWS_WORKLOAD_IDENTITY")
+        .map(|(_, value)| value.as_str());
+    let (role, token) = match mode {
+        Some("async") => {
+            let role = config
+                .workload_role
+                .clone()
+                .ok_or_else(|| io::Error::other("missing configured workload role"))?;
+            (role, None)
         }
+        Some("1") => {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match receive() {
+                    Ok((role, token)) => break (role, Some(token)),
+                    Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        _ => return Ok(()),
     };
 
     std::fs::create_dir(DIRECTORY)?;
-    install_token(&token)?;
+    if let Some(token) = &token {
+        install_token(token)?;
+    }
     let view = super::in_root(DIRECTORY);
     std::fs::create_dir(&view)?;
     mount(
@@ -93,21 +114,58 @@ pub(super) fn prepare(config: &mut InstanceConfig) -> io::Result<()> {
         .environment
         .push(("AWS_WEB_IDENTITY_TOKEN_FILE".into(), FILE.into()));
     config.environment.push(("AWS_ROLE_ARN".into(), role.clone()));
-    ROLE.set(role)
+    let background = token.is_none();
+    IDENTITY
+        .set(Identity { role, background })
         .map_err(|_| io::Error::other("workload identity already configured"))?;
-    super::log("workload identity installed before tenant start");
+    if background {
+        super::log("workload identity delivery is asynchronous");
+    } else {
+        super::log("workload identity installed before tenant start");
+    }
     Ok(())
 }
 
 pub(super) fn refresh() -> io::Result<()> {
-    let Some(expected) = ROLE.get() else {
+    let Some(expected) = IDENTITY.get() else {
         return Ok(());
     };
     let (role, token) = receive()?;
-    if &role != expected {
+    if role != expected.role {
         return Err(io::Error::other(
             "workload identity role changed during deployment",
         ));
     }
     install_token(&token)
+}
+
+pub(super) fn before_release() -> io::Result<()> {
+    if asynchronous() {
+        // A restored file could predate a long sleep. The broker exchange runs in the
+        // identity worker and never holds the clock or tenant-release handshake.
+        if let Err(error) = std::fs::remove_file(FILE) {
+            if error.kind() != io::ErrorKind::NotFound {
+                super::log("the previous workload token could not be removed");
+            }
+        }
+    } else if synchronous() {
+        refresh()?;
+        super::log("workload identity refreshed before tenant release");
+    }
+    Ok(())
+}
+
+pub(super) fn serve() -> ! {
+    let mut next = Instant::now();
+    loop {
+        if Instant::now() >= next || !Path::new(FILE).exists() {
+            let delay = if refresh().is_ok() {
+                REFRESH_INTERVAL
+            } else {
+                Duration::from_secs(1)
+            };
+            next = Instant::now() + delay;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
 }

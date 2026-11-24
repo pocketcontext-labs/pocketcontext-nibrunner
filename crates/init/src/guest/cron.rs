@@ -621,6 +621,7 @@ mod tests {
             program: "/app/server".into(),
             working_directory: "/app".into(),
             hostname: None,
+            workload_role: None,
             max_restarts: 0,
             initial_backoff_ms: 0,
             max_backoff_ms: 0,

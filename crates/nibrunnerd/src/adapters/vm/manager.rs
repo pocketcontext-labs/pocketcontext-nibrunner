@@ -169,14 +169,23 @@ impl VmManager {
         let working_dir = self.vm_dir.join(request.desired.app_id.as_str());
         make_directory(&working_dir, VM_DIR_MODE).map_err(|error| VmError::Host(error.to_string()))?;
 
+        let environment = &request.desired.config.command.environment;
+        let background_identity = environment
+            .iter()
+            .any(|(key, value)| key == "AWS_WORKLOAD_IDENTITY" && value.expose() == "async");
+        let workload_role = background_identity
+            .then(|| self.identities.role_for(&request.desired.app_id))
+            .transpose()
+            .map_err(|error| VmError::Host(format!("the app has no configured workload role: {error}")))?;
         let rendered = render_instance_env(&InstanceEnvContent {
+            workload_role: workload_role.as_deref(),
             http_port: request.desired.config.http_port,
             layers: request.payload.layer_image_paths.len(),
             hostnames: &request.desired.hostnames,
             program: &request.desired.config.command.program,
             working_directory: &request.desired.config.command.working_directory,
             args: &request.desired.config.command.args,
-            environment: &request.desired.config.command.environment,
+            environment,
             restart_policy: &request.desired.config.restart_policy,
         })
         .map_err(|error| VmError::Host(error.to_string()))?;
@@ -1186,7 +1195,7 @@ mod tests {
                 ),
             )),
             logs: TenantLogReceiver::new(),
-            identities: super::super::identity::Identities::new(root.join("identities")),
+            identities: super::super::identity::Identities::new(root.join("identities"), root.join("roles")),
             cron_registration: crate::adapters::cron_registration::CronRegistrationReceiver::new(Arc::new(
                 crate::domain::cron::registry::CronRegistry::new(
                     Arc::new(crate::repositories::cron_repository::MockCronRepository::new()),

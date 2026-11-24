@@ -14,6 +14,7 @@ use guest_contract::vsock::{GUEST_VSOCK_FILENAME, IDENTITY_PORT, MAX_IDENTITY_BY
 
 pub(crate) struct Identities {
     sources: PathBuf,
+    roles: PathBuf,
     listeners: Mutex<BTreeMap<AppId, JoinHandle<()>>>,
 }
 
@@ -22,11 +23,16 @@ pub(super) fn socket_path(jail: &Path) -> PathBuf {
 }
 
 impl Identities {
-    pub(crate) fn new(sources: PathBuf) -> Self {
+    pub(crate) fn new(sources: PathBuf, roles: PathBuf) -> Self {
         Self {
             sources,
+            roles,
             listeners: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    pub(super) fn role_for(&self, app: &AppId) -> io::Result<String> {
+        read_field(&self.roles.join(app.as_str()).join("role-arn"), 2048)
     }
 
     pub(crate) async fn attach(&self, app: &AppId, jail: &Path) -> io::Result<()> {
@@ -36,7 +42,7 @@ impl Identities {
             previous.abort();
         }
         let socket = socket_path(jail);
-        if !source.try_exists()? {
+        if !source.try_exists()? && !self.roles.join(app.as_str()).join("role-arn").try_exists()? {
             return Ok(());
         }
         let listener = crate::unix_socket::bind(&socket)?;
@@ -109,7 +115,7 @@ mod tests {
         use tokio::io::AsyncReadExt;
         let root = tempfile::tempdir().unwrap();
         let sources = root.path().join("credentials");
-        let identities = Identities::new(sources.clone());
+        let identities = Identities::new(sources.clone(), root.path().join("roles"));
         for name in ["app-a", "app-b"] {
             let source = sources.join(name);
             std::fs::create_dir_all(&source).unwrap();
@@ -145,6 +151,37 @@ mod tests {
         assert!(read("app-a").await.ends_with(".rotated\n"));
         std::fs::remove_file(source.join("token")).unwrap();
         assert!(read("app-a").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_static_role_keeps_its_jail_listener_through_a_broker_outage() {
+        use tokio::io::AsyncReadExt;
+        let root = tempfile::tempdir().unwrap();
+        let app = AppId::parse("app-a").unwrap();
+        let sources = root.path().join("tokens");
+        let roles = root.path().join("roles");
+        let role_dir = roles.join(app.as_str());
+        std::fs::create_dir_all(&role_dir).unwrap();
+        let role = "arn:aws:iam::123456789012:role/app-a";
+        std::fs::write(role_dir.join("role-arn"), role).unwrap();
+        let jail = root.path().join("jail");
+        std::fs::create_dir(&jail).unwrap();
+        let identities = Identities::new(sources.clone(), roles);
+        assert_eq!(identities.role_for(&app).unwrap(), role);
+        identities.attach(&app, &jail).await.unwrap();
+        let read = || async {
+            let mut socket = tokio::net::UnixStream::connect(socket_path(&jail)).await.unwrap();
+            let mut result = String::new();
+            socket.read_to_string(&mut result).await.unwrap();
+            result
+        };
+        assert!(read().await.is_empty());
+        let source = sources.join(app.as_str());
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("role-arn"), role).unwrap();
+        let claims = URL_SAFE_NO_PAD.encode(br#"{"exp":4102444800}"#);
+        std::fs::write(source.join("token"), format!("header.{claims}.token")).unwrap();
+        assert!(read().await.ends_with(".token\n"));
     }
 
     #[test]

@@ -2,9 +2,10 @@ use nix::unistd::{ForkResult, Pid};
 
 use guest_contract::instance_env::InstanceConfig;
 
-use crate::guest::{control, cron, filesystem, log, memory};
+use crate::guest::{control, cron, filesystem, identity, log, memory};
 
 pub(crate) struct Channels {
+    identity: Option<Pid>,
     control: Option<Pid>,
     files: Option<Pid>,
     cron: Option<Pid>,
@@ -12,6 +13,11 @@ pub(crate) struct Channels {
 
 pub(crate) fn start(config: &InstanceConfig, ceiling: &memory::Ceiling) -> Channels {
     Channels {
+        identity: if identity::asynchronous() {
+            fork_channel("workload identity", identity::serve)
+        } else {
+            None
+        },
         control: fork_channel("control", control::serve),
         files: fork_channel("filesystem", filesystem::serve),
         cron: cron::start(config, ceiling),
@@ -23,11 +29,11 @@ impl Channels {
         if let Some(pid) = self.cron {
             cron::stop(pid);
         }
-        for pid in [self.control, self.files].into_iter().flatten() {
+        for pid in [self.control, self.files, self.identity].into_iter().flatten() {
             let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM);
         }
         control::thaw_quietly();
-        for pid in [self.control, self.files].into_iter().flatten() {
+        for pid in [self.control, self.files, self.identity].into_iter().flatten() {
             let _ = nix::sys::wait::waitpid(pid, None);
         }
     }

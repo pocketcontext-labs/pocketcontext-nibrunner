@@ -105,3 +105,12 @@ over the jail's vsock before starting the app, sets `AWS_ROLE_ARN` and
 `/run/drop-identity`. The guest checks for a replacement every 15 seconds while running.
 On snapshot restore, init synchronizes the clock and refreshes the token before releasing
 the tenant. The host requires at least ten seconds of remaining token lifetime for delivery.
+
+For apps that can serve local data through an issuer outage, provision the app's fixed role ARN
+in the host-owned file `/etc/nibrunner/workload-identity/<appId>/role-arn` and select
+`AWS_WORKLOAD_IDENTITY=async`. The host puts that role in the read-only boot configuration.
+Guest init prepares the token mount and starts the tenant even when the issuer is offline.
+A separate guest worker fetches a token for the configured role, retries after failures, and
+replaces the file as tokens rotate. On wake, init discards the previous file and releases the
+tenant after synchronizing its clock. Clients must handle a missing token while local service
+continues. A missing database still requires successful application-level recovery.

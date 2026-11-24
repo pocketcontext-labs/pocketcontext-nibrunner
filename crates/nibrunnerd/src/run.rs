@@ -147,7 +147,10 @@ pub async fn build_host(
         volumes: volumes.clone(),
         logs,
         cron_registration,
-        identities: crate::adapters::vm::identity::Identities::new("/run/drop-m1/identities".into()),
+        identities: crate::adapters::vm::identity::Identities::new(
+            "/run/drop-m1/identities".into(),
+            "/etc/nibrunner/workload-identity".into(),
+        ),
         sink,
         state: state.clone(),
         metrics: metrics.clone(),

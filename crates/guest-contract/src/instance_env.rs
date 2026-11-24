@@ -17,6 +17,7 @@ pub struct InstanceEnvContent<'a> {
     /// How many layer drives follow the three every guest has.
     pub layers: usize,
     pub hostnames: &'a [AppHostname],
+    pub workload_role: Option<&'a str>,
     pub program: &'a GuestPath,
     pub working_directory: &'a GuestPath,
     pub args: &'a TenantArguments,
@@ -56,6 +57,14 @@ pub fn render_instance_env(content: &InstanceEnvContent<'_>) -> Result<String, U
         format!("{RUNTIME_PREFIX}PROGRAM={}", content.program),
         format!("{RUNTIME_PREFIX}CWD={}", content.working_directory),
     ];
+    if let Some(role) = content.workload_role {
+        if has_forbidden_character(role) {
+            return Err(UnrepresentableEnvironment {
+                variable_name: "NIBRUN_WORKLOAD_ROLE_ARN".into(),
+            });
+        }
+        lines.push(format!("{RUNTIME_PREFIX}WORKLOAD_ROLE_ARN={role}"));
+    }
     if let Some(hostname) = platform_hostname(content.hostnames) {
         lines.push(format!("{RUNTIME_PREFIX}HOSTNAME={hostname}"));
     }
@@ -121,6 +130,7 @@ pub struct InstanceConfig {
     pub program: String,
     pub working_directory: String,
     pub hostname: Option<String>,
+    pub workload_role: Option<String>,
     pub max_restarts: u32,
     pub initial_backoff_ms: u32,
     pub max_backoff_ms: u32,
@@ -229,6 +239,7 @@ pub fn parse_instance_env(text: &str) -> Result<InstanceConfig, InstanceEnvError
         program: required("NIBRUN_PROGRAM")?.clone(),
         working_directory: required("NIBRUN_CWD")?.clone(),
         hostname: named("NIBRUN_HOSTNAME").cloned(),
+        workload_role: named("NIBRUN_WORKLOAD_ROLE_ARN").cloned(),
         max_restarts: number("NIBRUN_MAX_RESTARTS")?,
         initial_backoff_ms: number("NIBRUN_INITIAL_BACKOFF_MS")?,
         max_backoff_ms: number("NIBRUN_MAX_BACKOFF_MS")?,
@@ -289,6 +300,7 @@ mod tests {
     }
 
     struct Overrides {
+        workload_role: Option<&'static str>,
         http_port: HttpPort,
         hostnames: Vec<AppHostname>,
         args: Vec<String>,
@@ -298,6 +310,7 @@ mod tests {
     impl Default for Overrides {
         fn default() -> Self {
             Self {
+                workload_role: None,
                 http_port: DEFAULT_HTTP_PORT,
                 hostnames: vec![hostname(PLATFORM_HOSTNAME, AppHostnameKind::Platform)],
                 args: vec![],
@@ -309,6 +322,7 @@ mod tests {
     fn attempt(overrides: Overrides) -> Result<String, UnrepresentableEnvironment> {
         let args = TenantArguments::try_from(overrides.args).unwrap();
         render_instance_env(&InstanceEnvContent {
+            workload_role: overrides.workload_role,
             http_port: overrides.http_port,
             layers: 1,
             hostnames: &overrides.hostnames,
@@ -322,6 +336,25 @@ mod tests {
 
     fn render(overrides: Overrides) -> String {
         attempt(overrides).unwrap()
+    }
+
+    #[test]
+    fn the_host_selects_the_role_even_when_the_tenant_requests_another() {
+        let trusted = "arn:aws:iam::123456789012:role/app-a";
+        let forged = "arn:aws:iam::123456789012:role/app-b";
+        let rendered = render(Overrides {
+            workload_role: Some(trusted),
+            environment: environment(&[
+                ("AWS_WORKLOAD_IDENTITY", "async"),
+                ("AWS_ROLE_ARN", forged),
+                ("NIBRUN_WORKLOAD_ROLE_ARN", forged),
+            ]),
+            ..Default::default()
+        });
+        assert_eq!(
+            parse_instance_env(&rendered).unwrap().workload_role.as_deref(),
+            Some(trusted)
+        );
     }
 
     #[test]
@@ -472,6 +505,7 @@ mod both_ends {
             kind: AppHostnameKind::Platform,
         }];
         render_instance_env(&InstanceEnvContent {
+            workload_role: None,
             http_port: DEFAULT_HTTP_PORT,
             layers: 2,
             hostnames: &hostnames,
