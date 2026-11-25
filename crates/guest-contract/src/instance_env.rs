@@ -18,6 +18,7 @@ pub struct InstanceEnvContent<'a> {
     pub layers: usize,
     pub hostnames: &'a [AppHostname],
     pub workload_role: Option<&'a str>,
+    pub host_s3: bool,
     pub hooks: Option<(protocol::GuestPort, &'a protocol::SecretString)>,
     pub program: &'a GuestPath,
     pub working_directory: &'a GuestPath,
@@ -74,6 +75,9 @@ pub fn render_instance_env(content: &InstanceEnvContent<'_>) -> Result<String, U
             });
         }
         lines.push(format!("{RUNTIME_PREFIX}WORKLOAD_ROLE_ARN={role}"));
+    }
+    if content.host_s3 {
+        lines.push(format!("{RUNTIME_PREFIX}HOST_S3=1"));
     }
     if let Some(hostname) = platform_hostname(content.hostnames) {
         lines.push(format!("{RUNTIME_PREFIX}HOSTNAME={hostname}"));
@@ -141,6 +145,7 @@ pub struct InstanceConfig {
     pub working_directory: String,
     pub hostname: Option<String>,
     pub workload_role: Option<String>,
+    pub host_s3: bool,
     pub max_restarts: u32,
     pub initial_backoff_ms: u32,
     pub max_backoff_ms: u32,
@@ -256,6 +261,7 @@ pub fn parse_instance_env(text: &str) -> Result<InstanceConfig, InstanceEnvError
         working_directory: required("NIBRUN_CWD")?.clone(),
         hostname: named("NIBRUN_HOSTNAME").cloned(),
         workload_role: named("NIBRUN_WORKLOAD_ROLE_ARN").cloned(),
+        host_s3: named("NIBRUN_HOST_S3").is_some_and(|value| value == "1"),
         max_restarts: number("NIBRUN_MAX_RESTARTS")?,
         initial_backoff_ms: number("NIBRUN_INITIAL_BACKOFF_MS")?,
         max_backoff_ms: number("NIBRUN_MAX_BACKOFF_MS")?,
@@ -317,6 +323,7 @@ mod tests {
 
     struct Overrides {
         workload_role: Option<&'static str>,
+        host_s3: bool,
         hook_token: Option<protocol::SecretString>,
         http_port: HttpPort,
         hostnames: Vec<AppHostname>,
@@ -328,6 +335,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 workload_role: None,
+                host_s3: false,
                 hook_token: None,
                 http_port: DEFAULT_HTTP_PORT,
                 hostnames: vec![hostname(PLATFORM_HOSTNAME, AppHostnameKind::Platform)],
@@ -345,6 +353,7 @@ mod tests {
                 .as_ref()
                 .map(|token| (protocol::GuestPort::new(8081).unwrap(), token)),
             workload_role: overrides.workload_role,
+            host_s3: overrides.host_s3,
             http_port: overrides.http_port,
             layers: 1,
             hostnames: &overrides.hostnames,
@@ -399,6 +408,20 @@ mod tests {
             parse_instance_env(&rendered).unwrap().workload_role.as_deref(),
             Some(trusted)
         );
+    }
+
+    #[test]
+    fn host_s3_reaches_the_guest_only_from_the_host() {
+        let tenant_claim = render(Overrides {
+            environment: environment(&[("NIBRUN_HOST_S3", "1"), ("HOST_S3", "1")]),
+            ..Default::default()
+        });
+        assert!(!parse_instance_env(&tenant_claim).unwrap().host_s3);
+        let host = render(Overrides {
+            host_s3: true,
+            ..Default::default()
+        });
+        assert!(parse_instance_env(&host).unwrap().host_s3);
     }
 
     #[test]
@@ -551,6 +574,7 @@ mod both_ends {
         render_instance_env(&InstanceEnvContent {
             hooks: None,
             workload_role: None,
+            host_s3: false,
             http_port: DEFAULT_HTTP_PORT,
             layers: 2,
             hostnames: &hostnames,

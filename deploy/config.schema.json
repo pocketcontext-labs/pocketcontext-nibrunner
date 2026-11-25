@@ -29,6 +29,10 @@
       "description": "Explicitly managed whole-device storage for snapshots and ZeroFS caches. Absent leaves\nmounting to the operator. Devices without filesystem signatures are initialized,\ndiscarding any unrecognized raw contents.\nAbsent enforces every host requirement. Present only on a test host that accepts a\nweaker one.",
       "$ref": "#/$defs/host_security"
     },
+    "host_services": {
+      "description": "Absent refuses every guest's host-service connections.",
+      "$ref": "#/$defs/host_services"
+    },
     "host_storage": {
       "$ref": "#/$defs/host_storage"
     },
@@ -194,6 +198,20 @@
       "additionalProperties": false,
       "required": [
         "allow_active_smt"
+      ]
+    },
+    "host_services": {
+      "type": "object",
+      "properties": {
+        "socket": {
+          "description": "The local service's Unix socket that guests with `hostServices` are relayed to.",
+          "type": "string",
+          "pattern": "^/"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "socket"
       ]
     },
     "host_storage": {

@@ -240,6 +240,16 @@ pub struct SignInEmail {
     pub recipient: SignInMailbox,
 }
 
+/// Services the host offers the guest over vsock instead of credentials in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct HostServices {
+    /// Forward the guest's S3 traffic to the host's service socket: the guest gets an endpoint on
+    /// `127.0.0.1:9000` and static placeholder keys, and no workload identity.
+    pub s3: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(!try_from, transform = desired_instance_rules))]
@@ -271,9 +281,16 @@ pub struct DesiredInstance {
     /// Submit six-digit sign-in codes to this mailbox through the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in_email: Option<SignInEmail>,
+    /// What the host serves this guest over vsock instead of credentials inside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_services: Option<HostServices>,
 }
 
 impl DesiredInstance {
+    pub fn host_s3(&self) -> bool {
+        self.host_services.is_some_and(|services| services.s3)
+    }
+
     /// The policy this instance runs under, whichever of the two spellings its document used.
     /// A document that used neither is one written before either existed, and means what it
     /// meant then.
@@ -307,6 +324,8 @@ struct DesiredInstanceFields {
     hostnames: Vec<AppHostname>,
     access: AccessPolicy,
     sign_in_email: Option<SignInEmail>,
+    #[serde(default)]
+    host_services: Option<HostServices>,
 }
 
 impl TryFrom<DesiredInstanceFields> for DesiredInstance {
@@ -326,6 +345,18 @@ impl TryFrom<DesiredInstanceFields> for DesiredInstance {
                     "only an on-request instance may name a sleepWhen other than never, because nothing would wake it again",
                 ));
             }
+        }
+        if fields.host_services.is_some_and(|services| services.s3)
+            && fields
+                .config
+                .command
+                .environment
+                .iter()
+                .any(|(name, _)| name == "AWS_WORKLOAD_IDENTITY")
+        {
+            return Err(InvalidValue::new_public(
+                "hostServices.s3 replaces the workload identity; drop AWS_WORKLOAD_IDENTITY from the environment",
+            ));
         }
         if fields.layers.is_empty() {
             return Err(InvalidValue::new_public(
@@ -349,6 +380,7 @@ impl TryFrom<DesiredInstanceFields> for DesiredInstance {
             hostnames: fields.hostnames,
             access: fields.access,
             sign_in_email: fields.sign_in_email,
+            host_services: fields.host_services,
         })
     }
 }

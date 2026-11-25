@@ -304,6 +304,17 @@
         "desiredState": {
           "$ref": "#/$defs/DesiredInstanceState"
         },
+        "hostServices": {
+          "description": "What the host serves this guest over vsock instead of credentials inside it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostServices"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "hostnames": {
           "description": "What the HTTP proxy routes to this app's `httpPort`. Empty for an app nothing outside needs\nto reach by name.",
           "type": "array",
@@ -709,6 +720,20 @@
       "description": "an identifier",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$"
+    },
+    "HostServices": {
+      "description": "Services the host offers the guest over vsock instead of credentials in it.",
+      "type": "object",
+      "properties": {
+        "s3": {
+          "description": "Forward the guest's S3 traffic to the host's service socket: the guest gets an endpoint on\n`127.0.0.1:9000` and static placeholder keys, and no workload identity.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "s3"
+      ]
     },
     "Hostname": {
       "description": "a hostname",

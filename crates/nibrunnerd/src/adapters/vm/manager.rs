@@ -48,6 +48,7 @@ pub struct VmManager {
     pub volumes: Arc<dyn VolumeBackend>,
     pub logs: Arc<TenantLogReceiver>,
     pub(crate) sign_in_email: super::sign_in_email::SignInEmailService,
+    pub(crate) host_services: super::host_services::HostServicesForwarder,
     pub(crate) identities: super::identity::Identities,
     pub cron_registration: Arc<crate::adapters::cron_registration::CronRegistrationReceiver>,
     pub sink: Arc<dyn LogSink>,
@@ -172,9 +173,11 @@ impl VmManager {
         make_directory(&working_dir, VM_DIR_MODE).map_err(|error| VmError::Host(error.to_string()))?;
 
         let environment = &request.desired.config.command.environment;
-        let background_identity = environment
-            .iter()
-            .any(|(key, value)| key == "AWS_WORKLOAD_IDENTITY" && value.expose() == "async");
+        let host_s3 = request.desired.host_s3();
+        let background_identity = !host_s3
+            && environment
+                .iter()
+                .any(|(key, value)| key == "AWS_WORKLOAD_IDENTITY" && value.expose() == "async");
         let workload_role = background_identity
             .then(|| self.identities.role_for(&request.desired.app_id))
             .transpose()
@@ -187,6 +190,7 @@ impl VmManager {
         let rendered = render_instance_env(&InstanceEnvContent {
             hooks: hooks.as_ref().map(|h| (h.port, &h.token)),
             workload_role: workload_role.as_deref(),
+            host_s3,
             http_port: request.desired.config.http_port,
             layers: request.payload.layer_image_paths.len(),
             hostnames: &request.desired.hostnames,
@@ -247,6 +251,7 @@ impl VmManager {
         app_id: &AppId,
         deployment_id: &protocol::DeploymentId,
         working_dir: &Path,
+        host_s3: bool,
     ) -> Result<(), VmError> {
         self.logs
             .attach(
@@ -269,6 +274,9 @@ impl VmManager {
             self.logs.detach(app_id).await;
             return Err(VmError::Host(error.to_string()));
         }
+        if host_s3 {
+            return Ok(());
+        }
         self.identities
             .attach(app_id, working_dir)
             .await
@@ -284,10 +292,22 @@ impl VmManager {
             &request.desired.app_id,
             &request.desired.deployment_id,
             &jail.root,
+            request.desired.host_s3(),
         )
         .await?;
         let granted = async {
             self.sign_in_email
+                .attach(
+                    &request.desired.app_id,
+                    &request.desired.deployment_id,
+                    &jail.root,
+                    jail.uid,
+                    jail.gid,
+                    self.processes.clone(),
+                )
+                .await
+                .map_err(|error| VmError::Host(error.to_string()))?;
+            self.host_services
                 .attach(
                     &request.desired.app_id,
                     &request.desired.deployment_id,
@@ -312,6 +332,7 @@ impl VmManager {
         .await;
         if let Err(error) = granted {
             self.sign_in_email.detach(&request.desired.app_id).await;
+            self.host_services.detach(&request.desired.app_id).await;
             self.cron_registration.detach(&request.desired.app_id).await;
             self.logs.detach(&request.desired.app_id).await;
             return Err(error);
@@ -330,6 +351,7 @@ impl VmManager {
             ));
         }
         self.sign_in_email.detach(app_id).await;
+        self.host_services.detach(app_id).await;
         self.identities.detach(app_id).await;
         self.logs.detach(app_id).await;
         self.cron_registration.detach(app_id).await;
@@ -521,6 +543,7 @@ impl VmManager {
         .await;
         if outcome.is_ok() {
             self.sign_in_email.detach(&request.app_id).await;
+            self.host_services.detach(&request.app_id).await;
             self.processes.stop(&request.app_id).await;
         } else {
             self.discard_snapshot(&request.app_id);
@@ -528,6 +551,7 @@ impl VmManager {
         if let Some(memory) = memory.as_mut() {
             if let Err(error) = memory.restore() {
                 self.sign_in_email.detach(&request.app_id).await;
+                self.host_services.detach(&request.app_id).await;
                 self.processes.stop(&request.app_id).await;
                 return Err(VmError::Host(format!(
                     "the VM's memory ceiling could not be restored: {error}"
@@ -622,6 +646,7 @@ impl Vmm for VmManager {
             .await;
         if let Err(error) = started {
             self.sign_in_email.detach(&app_id).await;
+            self.host_services.detach(&app_id).await;
             self.cron_registration.detach(&app_id).await;
             let _ = self.logs.detach(&app_id).await;
             return Err(VmError::Host(error.to_string()));
@@ -637,6 +662,7 @@ impl Vmm for VmManager {
             let error = self.startup_failure(&app_id, error);
             self.processes.stop(&app_id).await;
             self.sign_in_email.detach(&app_id).await;
+            self.host_services.detach(&app_id).await;
             self.cron_registration.detach(&app_id).await;
             self.logs.detach(&app_id).await;
             return Err(error);
@@ -766,7 +792,7 @@ impl Vmm for VmManager {
         let _ = std::fs::remove_file(&paths.stamp_path);
         let jail = self.prepare_jail(&request.app_id).await?;
         let jailed_at = Instant::now();
-        self.attach_channels(&request.app_id, &request.deployment_id, &jail.root)
+        self.attach_channels(&request.app_id, &request.deployment_id, &jail.root, false)
             .await?;
         jail.grant_socket(&tenant_log_socket_path(&jail.root))
             .map_err(|error| VmError::Host(error.to_string()))?;
@@ -793,6 +819,17 @@ impl Vmm for VmManager {
         let state_path = PathBuf::from("/snapshots/state");
         let memory_path = PathBuf::from("/snapshots/memory");
         self.sign_in_email
+            .attach(
+                &request.app_id,
+                &request.deployment_id,
+                &jail.root,
+                jail.uid,
+                jail.gid,
+                self.processes.clone(),
+            )
+            .await
+            .map_err(|error| VmError::Host(error.to_string()))?;
+        self.host_services
             .attach(
                 &request.app_id,
                 &request.deployment_id,
@@ -836,6 +873,7 @@ impl Vmm for VmManager {
         let cleanup_started_at = Instant::now();
         if outcome.is_err() {
             self.sign_in_email.detach(&request.app_id).await;
+            self.host_services.detach(&request.app_id).await;
             self.processes.stop(&request.app_id).await;
         }
         self.discard_snapshot(&request.app_id);
@@ -880,6 +918,7 @@ impl Vmm for VmManager {
     async fn stop(&self, app_id: &AppId) -> Result<(), VmError> {
         self.notify_guest(app_id, protocol::HookEvent::Terminate).await;
         self.sign_in_email.detach(app_id).await;
+        self.host_services.detach(app_id).await;
         self.discard_snapshot(app_id);
         self.processes.stop(app_id).await;
         Ok(())
@@ -890,6 +929,7 @@ impl Vmm for VmManager {
         self.discard_snapshot(app_id);
         self.processes.forget(app_id);
         self.sign_in_email.detach(app_id).await;
+        self.host_services.detach(app_id).await;
         self.identities.detach(app_id).await;
         self.logs.detach(app_id).await;
         self.cron_registration.detach(app_id).await;
@@ -933,7 +973,7 @@ impl Vmm for VmManager {
             return Ok(());
         };
         let working_dir = self.working_dir_for(app_id);
-        self.attach_channels(app_id, &record.deployment_id, &working_dir)
+        self.attach_channels(app_id, &record.deployment_id, &working_dir, false)
             .await?;
         if self
             .processes
@@ -955,6 +995,17 @@ impl Vmm for VmManager {
                 use std::os::unix::fs::MetadataExt;
                 let owner = std::fs::metadata(&jail).map_err(|error| VmError::Host(error.to_string()))?;
                 self.sign_in_email
+                    .attach(
+                        app_id,
+                        &deployment,
+                        &jail,
+                        owner.uid(),
+                        owner.gid(),
+                        self.processes.clone(),
+                    )
+                    .await
+                    .map_err(|error| VmError::Host(error.to_string()))?;
+                self.host_services
                     .attach(
                         app_id,
                         &deployment,
@@ -1262,6 +1313,7 @@ mod tests {
             )),
             logs: TenantLogReceiver::new(),
             sign_in_email: super::super::sign_in_email::SignInEmailService::disabled(),
+            host_services: super::super::host_services::HostServicesForwarder::disabled(),
             identities: super::super::identity::Identities::new(root.join("identities"), root.join("roles")),
             cron_registration: crate::adapters::cron_registration::CronRegistrationReceiver::new(Arc::new(
                 crate::domain::cron::registry::CronRegistry::new(

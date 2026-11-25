@@ -76,6 +76,7 @@ pub(crate) fn config(edit: impl FnOnce(&mut InstanceConfig)) -> InstanceConfig {
         working_directory: "/app".to_string(),
         hostname: None,
         workload_role: None,
+        host_s3: false,
         max_restarts: 5,
         initial_backoff_ms: 500,
         max_backoff_ms: 30_000,

@@ -6,6 +6,7 @@ mod identity;
 mod logs;
 mod memory;
 mod mounts;
+mod s3_bridge;
 mod startup;
 mod supervisor;
 mod vsock;
@@ -67,7 +68,11 @@ fn boot() -> Result<(InstanceConfig, memory::Ceiling), String> {
     let mut config = read_instance_config()?;
     stack_root(&config)?;
     write_resolv_conf(&config)?;
-    identity::prepare(&mut config).map_err(|error| format!("workload identity setup failed: {error}"))?;
+    if config.host_s3 {
+        s3_bridge::prepare(&mut config);
+    } else {
+        identity::prepare(&mut config).map_err(|error| format!("workload identity setup failed: {error}"))?;
+    }
     Ok((config, ceiling))
 }
 

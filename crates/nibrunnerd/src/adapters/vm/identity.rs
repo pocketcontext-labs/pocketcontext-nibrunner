@@ -42,7 +42,9 @@ impl Identities {
             previous.abort();
         }
         let socket = socket_path(jail);
-        if !source.try_exists()? && !self.roles.join(app.as_str()).join("role-arn").try_exists()? {
+        if !source.join("role-arn").try_exists()?
+            && !self.roles.join(app.as_str()).join("role-arn").try_exists()?
+        {
             return Ok(());
         }
         let listener = crate::unix_socket::bind(&socket)?;

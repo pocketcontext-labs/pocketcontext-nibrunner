@@ -9,6 +9,7 @@
     "tenant-log",
     "metrics",
     "filesystem",
-    "guest-connections"
+    "guest-connections",
+    "host-services"
   ]
 }

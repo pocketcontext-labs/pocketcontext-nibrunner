@@ -284,6 +284,7 @@ impl RunningHost {
                 idle_timeout_ms: None,
                 activation: None,
                 sign_in_email: None,
+                host_services: None,
                 access: AccessPolicy::Public,
                 layers: vec![DesiredLayer::Executable {
                     object: StoredObject {

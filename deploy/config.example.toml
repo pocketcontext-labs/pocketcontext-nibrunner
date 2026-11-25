@@ -96,5 +96,8 @@ socket = "/run/nibrunner/filesystem.sock"
 [guest_connections]
 socket = "/run/nibrunner/guest-connections.sock"
 
+[host_services]
+socket = "/run/drop-agent/host-services.sock"
+
 [logs]
 keep_mib_per_app = 256

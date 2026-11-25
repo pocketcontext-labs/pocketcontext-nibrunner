@@ -12,6 +12,14 @@ pub const IDENTITY_PORT: u32 = 51005;
 pub const SIGN_IN_EMAIL_PORT: u32 = 51006;
 pub const MAX_SIGN_IN_EMAIL_FRAME: usize = 128;
 pub const MAX_IDENTITY_BYTES: usize = 16 * 1024;
+pub const HOST_SERVICES_PORT: u32 = 51007;
+
+// The guest's S3 endpoint and its placeholder keys: the host ignores the signature they make and
+// signs again with the app's own session, so nothing secret is in the guest.
+pub const S3_BRIDGE_ADDRESS: &str = "127.0.0.1:9000";
+pub const S3_BRIDGE_ENDPOINT: &str = "http://127.0.0.1:9000";
+pub const S3_BRIDGE_ACCESS_KEY_ID: &str = "nibrunner-host-services";
+pub const S3_BRIDGE_SECRET_ACCESS_KEY: &str = "signed-again-by-the-host";
 
 pub const GUEST_VSOCK_FILENAME: &str = "logs.vsock";
 

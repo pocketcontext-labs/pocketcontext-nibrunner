@@ -162,6 +162,7 @@ pub fn desired_instance(edit: impl FnOnce(&mut DesiredInstance)) -> DesiredInsta
         config: app_config(|_| {}),
         hostnames: vec![],
         sign_in_email: None,
+        host_services: None,
         access: AccessPolicy::Public,
     };
     edit(&mut value);

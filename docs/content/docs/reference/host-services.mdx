@@ -1,0 +1,28 @@
+---
+title: Host services
+description: A guest's S3 traffic relayed to a local host service, with no credential in the guest.
+---
+
+Name the local service's socket in `config.toml`:
+
+```toml
+[host_services]
+socket = "/run/drop-agent/host-services.sock"
+```
+
+Then enable host services on an instance in the desired document:
+
+```json
+"hostServices": { "s3": true }
+```
+
+| Where | What happens |
+| --- | --- |
+| Guest | Init listens on `127.0.0.1:9000` before the tenant starts and relays each connection to vsock port 51007. The tenant gets `AWS_ENDPOINT_URL_S3=http://127.0.0.1:9000` and placeholder `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Any other AWS credential, endpoint or workload identity variable is removed. Use path-style addressing. |
+| Host | For each connection, the daemon checks that the jail's app runs the current deployment with `hostServices.s3`. It then connects to the socket, sends `CONNECT <appId> <deploymentId>\n` and relays bytes both ways. Each app may hold at most 32 connections and each host at most 512. |
+| Service | The service takes the app and deployment from the header, never from the guest. It ignores the guest's signature and signs again with the app's own credentials. |
+
+<Callout>
+  An instance with `hostServices.s3` gets no workload identity token. A document that also sets
+  `AWS_WORKLOAD_IDENTITY` is refused. Host-service connections do not keep an app awake.
+</Callout>

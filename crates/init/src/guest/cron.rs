@@ -622,6 +622,7 @@ mod tests {
             working_directory: "/app".into(),
             hostname: None,
             workload_role: None,
+            host_s3: false,
             max_restarts: 0,
             initial_backoff_ms: 0,
             max_backoff_ms: 0,

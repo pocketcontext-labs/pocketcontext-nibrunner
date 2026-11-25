@@ -177,6 +177,13 @@ pub struct GuestConnectionsConfig {
     pub socket: PathBuf,
 }
 
+/// Where a guest's host-service connections (vsock 51007) are relayed: a local service listening on
+/// a Unix socket, which the daemon connects to and tells the app and deployment in a header line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostServicesConfig {
+    pub socket: PathBuf,
+}
+
 /// How much of each app's output stays on disk. The newest `keep_bytes_per_app`, in two files:
 /// what the sink writes to, and the one before it. Nothing in this daemon reads them back; they
 /// are there for whoever tails them, and the cap is there because the disk they are on is the one
@@ -266,6 +273,7 @@ pub struct HostConfig {
     pub metrics: Option<MetricsConfig>,
     pub filesystem: Option<FilesystemConfig>,
     pub guest_connections: Option<GuestConnectionsConfig>,
+    pub host_services: Option<HostServicesConfig>,
     pub logs: LogsConfig,
     pub export_store_url: String,
     pub export_staging_dir: PathBuf,
@@ -389,6 +397,9 @@ mod file {
         /// Private byte streams to guest services, bound to the app's current deployment.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub(super) guest_connections: Option<GuestConnections>,
+        /// Absent refuses every guest's host-service connections.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(super) host_services: Option<HostServices>,
         /// Absent keeps the newest 256 MiB of each app's output.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub(super) logs: Option<Logs>,
@@ -695,6 +706,15 @@ mod file {
         pub(super) socket: Option<String>,
     }
 
+    #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    #[schemars(rename = "host_services")]
+    pub(super) struct HostServices {
+        /// The local service's Unix socket that guests with `hostServices` are relayed to.
+        #[schemars(required, pattern(ABSOLUTE_PATH))]
+        pub(super) socket: Option<String>,
+    }
+
     /// How much of each app's output stays on disk, under `paths.state_dir/logs`. Nothing on the
     /// host reads it back: it is there to be tailed.
     #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -831,6 +851,7 @@ impl HostConfig {
         let metrics = metrics(document.metrics.as_ref(), &proxy, &backend, max_apps)?;
         let filesystem = filesystem(document.filesystem.as_ref())?;
         let guest_connections = guest_connections(document.guest_connections.as_ref())?;
+        let host_services = host_services(document.host_services.as_ref())?;
         let logs = logs(document.logs.as_ref())?;
 
         let config = Self {
@@ -896,6 +917,7 @@ impl HostConfig {
             metrics,
             filesystem,
             guest_connections,
+            host_services,
             logs,
             export_store_url: object_store_url(
                 "exports.store_url",
@@ -907,6 +929,7 @@ impl HostConfig {
         };
         validate_host_storage(&config)?;
         validate_guest_connections(&config)?;
+        validate_host_services(&config)?;
         if !config.export_store_url.starts_with("s3://")
             && Path::new(&config.export_store_url).starts_with(&config.export_staging_dir)
         {
@@ -976,6 +999,7 @@ impl HostConfig {
             metrics: None,
             filesystem: None,
             guest_connections: None,
+            host_services: None,
             lifecycle_hook_timeout_seconds: std::num::NonZeroU16::new(10).expect("a positive timeout"),
             max_concurrent_vm_starts: std::num::NonZeroU16::new(2).expect("a positive start limit"),
             logs: LogsConfig::default(),
@@ -1070,6 +1094,9 @@ impl HostConfig {
             }),
             guest_connections: Some(GuestConnectionsConfig {
                 socket: PathBuf::from("/run/nibrunner/guest-connections.sock"),
+            }),
+            host_services: Some(HostServicesConfig {
+                socket: PathBuf::from("/run/drop-agent/host-services.sock"),
             }),
             lifecycle_hook_timeout_seconds: std::num::NonZeroU16::new(10).expect("a positive timeout"),
             max_concurrent_vm_starts: std::num::NonZeroU16::new(2).expect("a positive start limit"),
@@ -1194,6 +1221,9 @@ impl HostConfig {
                 .map(|connection| file::GuestConnections {
                     socket: text(&connection.socket),
                 }),
+            host_services: self.host_services.as_ref().map(|services| file::HostServices {
+                socket: text(&services.socket),
+            }),
             lifecycle_hook_timeout_seconds: Some(self.lifecycle_hook_timeout_seconds),
             max_concurrent_vm_starts: Some(self.max_concurrent_vm_starts),
             logs: Some(file::Logs {
@@ -1511,6 +1541,39 @@ fn guest_connections(
     Ok(Some(GuestConnectionsConfig {
         socket: path_key("guest_connections.socket", &document.socket)?,
     }))
+}
+
+fn host_services(document: Option<&file::HostServices>) -> Result<Option<HostServicesConfig>, ConfigError> {
+    let Some(document) = document else {
+        return Ok(None);
+    };
+    Ok(Some(HostServicesConfig {
+        socket: path_key("host_services.socket", &document.socket)?,
+    }))
+}
+
+fn validate_host_services(config: &HostConfig) -> Result<(), ConfigError> {
+    let Some(services) = &config.host_services else {
+        return Ok(());
+    };
+    let own = [
+        Some(crate::reload::socket(config)),
+        config
+            .filesystem
+            .as_ref()
+            .map(|filesystem| filesystem.socket.clone()),
+        config
+            .guest_connections
+            .as_ref()
+            .map(|connection| connection.socket.clone()),
+    ];
+    if own.iter().flatten().any(|socket| *socket == services.socket) {
+        return Err(ConfigError::invalid(
+            "host_services.socket",
+            "a socket other than the daemon's own",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_guest_connections(config: &HostConfig) -> Result<(), ConfigError> {
@@ -2656,6 +2719,26 @@ checkpoint_cache_dir = "/data/zerofs-checkpoint"
                 socket: PathBuf::from("/run/nibrunner/filesystem.sock"),
             })
         );
+    }
+
+    #[test]
+    fn host_services_name_an_absolute_socket_other_than_the_daemons_own() {
+        assert_eq!(parsed(&whole()).host_services, None);
+        let configured = with("[host_services]\nsocket = \"/run/drop-agent/host-services.sock\"\n");
+        assert_eq!(
+            configured.host_services.as_ref().unwrap().socket,
+            Path::new("/run/drop-agent/host-services.sock")
+        );
+        assert_eq!(parsed(&configured.to_toml()), configured);
+        for body in [
+            "[host_services]\n",
+            "[host_services]\nsocket = \"relative.sock\"\n",
+        ] {
+            assert!(refused(&document(&[], body)).contains("host_services.socket"));
+        }
+        let mut own = configured.clone();
+        own.host_services.as_mut().unwrap().socket = crate::reload::socket(&configured);
+        assert!(HostConfig::from_toml(&own.to_toml()).is_err());
     }
 
     #[test]

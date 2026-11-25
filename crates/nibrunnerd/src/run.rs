@@ -158,6 +158,13 @@ pub async fn build_host(
         sign_in_email: crate::adapters::vm::sign_in_email::SignInEmailService::from_service_credentials(
             cache.clone(),
         ),
+        host_services: crate::adapters::vm::host_services::HostServicesForwarder::new(
+            config
+                .host_services
+                .as_ref()
+                .map(|services| services.socket.clone()),
+            cache.clone(),
+        ),
         identities: crate::adapters::vm::identity::Identities::new(
             std::env::var_os("NIBRUN_IDENTITY_SOURCE_DIR")
                 .map(std::path::PathBuf::from)

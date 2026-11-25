@@ -1490,3 +1490,27 @@ fn customer_storage_requires_region_even_when_its_value_is_null() {
     assert!(!validator.is_valid(&customer));
     assert!(serde_json::from_value::<DesiredVolume>(customer).is_err());
 }
+
+#[test]
+fn host_s3_round_trips_and_refuses_a_workload_identity_beside_it() {
+    let mut document = instance_json();
+    document["hostServices"] = serde_json::json!({ "s3": true });
+    let instance: DesiredInstance = serde_json::from_value(document.clone()).unwrap();
+    assert!(instance.host_s3());
+    assert_eq!(
+        serde_json::to_value(&instance).unwrap()["hostServices"],
+        serde_json::json!({ "s3": true })
+    );
+    let without: DesiredInstance = serde_json::from_value(instance_json()).unwrap();
+    assert!(!without.host_s3());
+    assert!(serde_json::to_value(&without)
+        .unwrap()
+        .get("hostServices")
+        .is_none());
+
+    document["config"]["command"]["environment"]["AWS_WORKLOAD_IDENTITY"] = serde_json::json!("async");
+    let error = serde_json::from_value::<DesiredInstance>(document.clone()).unwrap_err();
+    assert!(error.to_string().contains("hostServices.s3"), "{error}");
+    document["hostServices"] = serde_json::json!({ "s3": true, "smtp": true });
+    assert!(serde_json::from_value::<DesiredInstance>(document).is_err());
+}
