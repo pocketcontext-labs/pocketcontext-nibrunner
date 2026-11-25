@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026.11.17] - 2026-11-25
+
+### Features
+
+- Relay a guest's S3 traffic to a host service instead of handing it credentials
+
 ## [2026.11.16] - 2026-11-25
 
 ### Features
