@@ -15,7 +15,7 @@ Rust workspace (`crates/*`) with the docs site under `docs/`.
 - **State:** SQLite through sqlx, with the offline query data committed under `.sqlx/`. New
   tables store fields in columns and related rows, without JSON records.
 - **Docs:** Fumadocs on Bun under `docs/`, served at [nibrunner.dev](https://nibrunner.dev)
-- **Commits:** Conventional Commits, checked on pull request titles by `check-pr-title`
+- **Commits:** Conventional Commits, committed and pushed directly to `main`
 
 ## Layout
 
@@ -179,11 +179,14 @@ The rootfs build applies the pinned Debian security archive and records installe
 
 ## Releases
 
-Run `prepare-release` on GitHub to open a release PR from `main`. `git-cliff`, pinned to a minor version in
+Prepare releases on `main`: `just prepare-release "$(just release-version)"`, commit
+`Cargo.toml`, `Cargo.lock` and `CHANGELOG.md` as `chore(release): <tag>`, push, then tag that commit
+and push the tag. The `prepare-release` workflow opens a release PR instead; use it only when the
+owner asks for a PR. `git-cliff`, pinned to a minor version in
 `mise.toml` and configured by `cliff.toml`, writes `CHANGELOG.md` from Conventional Commits. Tags
 use `vYEAR.MONTH.PATCH` in UTC, without zero padding. The patch starts at 0 each month and increments
 from the highest stable tag; historical date-counter prereleases do not advance it. The PR updates
-the workspace version in `Cargo.toml` and `Cargo.lock`. After merging, push the prepared tag on the merge commit.
+the workspace version in `Cargo.toml` and `Cargo.lock`.
 The `release` workflow verifies the pushed tag against the workspace version and publishes the
 binaries, guest image and checksums, then deploys the docs through GitHub OIDC in the same job.
 `just release-notes` runs `git-cliff --current` on the checked-out tag to
@@ -234,7 +237,11 @@ When a change affects code style, tooling, conventions, or project taste (a new 
 setting, a naming pattern, a dependency choice, a new generated file, etc.), propose updating this
 file to reflect it.
 
-## Pull requests
+## Branches and CI
+
+Work happens on `main`: commit and push directly. Do not create branches or pull requests
+unless the owner asks for one. Every commit is a Conventional Commit (`feat:`, `fix:`, `docs:`,
+`chore:`, …).
 
 PR workflows cancel superseded runs of the same workflow for the same pull request to save Actions
 minutes. Runs on `main` remain independent.
@@ -246,11 +253,8 @@ Host diagnostics and KVM probes live in `.github/scripts`; composite actions cal
 Cargo cache namespaces include `ImageOS`, so runner releases cannot reuse each other's native libraries.
 Failed VM initialization retains a bounded console tail in the error before cleanup removes its files.
 
-Work goes on a branch and lands on `main` through a pull request, squash-merged with the pull
-request's title as the commit subject — so the title is a Conventional Commit (`feat:`, `fix:`,
-`docs:`, `chore:`, …), and so is every commit on the branch. Never push to `main` directly.
-
-Keep PR descriptions minimal — the diff is self-explanatory, so don't enumerate every change.
+When the owner asks for a pull request, it is squash-merged with its title as the commit subject,
+so the title is a Conventional Commit (`check-pr-title` refuses one that is not). Keep PR descriptions minimal — the diff is self-explanatory, so don't enumerate every change.
 State the intent in a line or two.
 
 Do not add a validation section for checks CI already runs. Include validation only when it is
