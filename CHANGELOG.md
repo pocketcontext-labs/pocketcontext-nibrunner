@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026.11.16] - 2026-11-25
+
+### Features
+
+- Allow active host SMT on test hosts through host_security
+
+### Documentation
+
+- Work on main without branches or pull requests unless the owner asks
+
 ## [2026.11.15] - 2026-11-24
 
 ### Features
