@@ -22,6 +22,12 @@
     "name": "nibrunner_host_allocatable"
   },
   {
+    "help": "1 when the host started with SMT active, which only host_security.allow_active_smt permits.",
+    "kind": "gauge",
+    "labels": [],
+    "name": "nibrunner_host_smt_active"
+  },
+  {
     "help": "1 for the state an app is in, 0 for every state it is not.",
     "kind": "gauge",
     "labels": [

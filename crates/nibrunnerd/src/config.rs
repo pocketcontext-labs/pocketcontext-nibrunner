@@ -223,6 +223,14 @@ impl StorageFilesystem {
     }
 }
 
+/// What this host accepts about the machine under it that it would otherwise refuse.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HostSecurityConfig {
+    /// For a test host whose apps all trust each other: sibling threads can observe each other,
+    /// so the startup refusal of active SMT is traded for a warning and a gauge.
+    pub allow_active_smt: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostStorage {
     pub device: PathBuf,
@@ -240,6 +248,7 @@ pub struct HostConfig {
     /// nothing holds a copy of it.
     pub max_apps: u32,
     pub cron: CronConfig,
+    pub host_security: HostSecurityConfig,
     pub host_storage: Option<HostStorage>,
     pub state_dir: PathBuf,
     pub runtime_dir: PathBuf,
@@ -352,6 +361,10 @@ mod file {
         /// Explicitly managed whole-device storage for snapshots and ZeroFS caches. Absent leaves
         /// mounting to the operator. Devices without filesystem signatures are initialized,
         /// discarding any unrecognized raw contents.
+        /// Absent enforces every host requirement. Present only on a test host that accepts a
+        /// weaker one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub(super) host_security: Option<HostSecurity>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub(super) host_storage: Option<Storage>,
         /// Where this host keeps what is its own.
@@ -391,6 +404,16 @@ mod file {
         /// IANA time zone for every cron schedule, such as UTC or Europe/Zurich.
         #[schemars(length(min = 1))]
         pub(super) time_zone: Option<String>,
+    }
+
+    #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    #[schemars(rename = "host_security")]
+    pub(super) struct HostSecurity {
+        /// Start with host SMT active, warning and publishing `nibrunner_host_smt_active` instead
+        /// of refusing. Sibling threads of one core can observe each other's data, so only for a
+        /// test host whose apps all trust each other. An unknown SMT status is still refused.
+        pub(super) allow_active_smt: Option<bool>,
     }
 
     #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -820,6 +843,14 @@ impl HostConfig {
             )?,
             max_apps,
             cron,
+            host_security: HostSecurityConfig {
+                allow_active_smt: document
+                    .host_security
+                    .as_ref()
+                    .map(|security| required("host_security.allow_active_smt", security.allow_active_smt))
+                    .transpose()?
+                    .unwrap_or(false),
+            },
             host_storage: document
                 .host_storage
                 .as_ref()
@@ -924,6 +955,7 @@ impl HostConfig {
 
     fn laid_out(state_dir: PathBuf, runtime_dir: PathBuf, guest_image_dir: PathBuf) -> Self {
         Self {
+            host_security: HostSecurityConfig::default(),
             host_storage: None,
             max_apps: 1000,
             cron: CronConfig {
@@ -965,6 +997,9 @@ impl HostConfig {
     /// but the newest would otherwise be exactly what nobody noticed.
     pub fn example() -> Self {
         Self {
+            // Left out of the example because examples are copied, and the exception is for test
+            // hosts only.
+            host_security: HostSecurityConfig::default(),
             host_storage: Some(HostStorage {
                 device: PathBuf::from("/dev/disk/by-id/nvme-instance-store"),
                 mount_point: PathBuf::from("/data"),
@@ -1072,6 +1107,9 @@ impl HostConfig {
     fn to_document(&self) -> file::ConfigFile {
         let text = |path: &std::path::Path| Some(path.display().to_string());
         file::ConfigFile {
+            host_security: self.host_security.allow_active_smt.then_some(file::HostSecurity {
+                allow_active_smt: Some(true),
+            }),
             host_storage: self.host_storage.as_ref().map(|storage| file::Storage {
                 device: text(&storage.device),
                 mount_point: text(&storage.mount_point),

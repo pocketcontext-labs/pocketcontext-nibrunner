@@ -42,7 +42,8 @@ pub async fn build_host(
     executable: std::path::PathBuf,
 ) -> Result<Arc<Host>, StartupError> {
     crate::host_security::report_cpu_vulnerabilities();
-    crate::host_security::check().map_err(|error| StartupError::Unusable(error.to_string()))?;
+    let security = crate::host_security::check(&config.host_security)
+        .map_err(|error| StartupError::Unusable(error.to_string()))?;
     crate::install::storage::check(&config).map_err(|error| StartupError::Unusable(error.message()))?;
     for directory in [&config.state_dir, &config.runtime_dir, &config.snapshot_dir] {
         crate::json_store::make_directory(directory, 0o700).map_err(|error| {
@@ -95,6 +96,9 @@ pub async fn build_host(
         )),
     };
     let metrics = Arc::new(crate::domain::metrics::HostMetrics::new());
+    metrics
+        .smt_active
+        .store(security.smt_active, std::sync::atomic::Ordering::Relaxed);
     let payloads = LayerImages::new(
         artifacts.clone(),
         config.artifact_cache_dir(),

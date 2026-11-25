@@ -38,6 +38,7 @@ pub struct HostMetrics {
     pub resources: ResourceMetrics,
     pub layers: std::sync::Arc<layers::LayerMetrics>,
     pub conntrack: ConntrackWatch,
+    pub smt_active: std::sync::atomic::AtomicBool,
 }
 
 /// What a scrape is rendered from besides what the daemon counted: the report as it stands, the
@@ -307,6 +308,13 @@ static HOST_ALLOCATABLE: Metric = Metric {
     labels: &["resource"],
 };
 
+static HOST_SMT_ACTIVE: Metric = Metric {
+    name: "nibrunner_host_smt_active",
+    help: "1 when the host started with SMT active, which only host_security.allow_active_smt permits.",
+    kind: Kind::Gauge,
+    labels: &[],
+};
+
 static APP_STATE: Metric = Metric {
     name: "nibrunner_app_state",
     help: "1 for the state an app is in, 0 for every state it is not.",
@@ -368,6 +376,7 @@ pub(super) static DECLARED: &[&Metric] = &[
     &UP,
     &HOST_CAPACITY,
     &HOST_ALLOCATABLE,
+    &HOST_SMT_ACTIVE,
     &APP_STATE,
     &APP_RESTARTS_TOTAL,
     &APP_MEMORY_USED_BYTES,
@@ -447,6 +456,13 @@ pub fn render(metrics: &HostMetrics, scrape: &Scrape<'_>) -> String {
     ] {
         page.value(&HOST_ALLOCATABLE, &[("resource", resource)], value);
     }
+
+    page.declare(&HOST_SMT_ACTIVE);
+    page.value(
+        &HOST_SMT_ACTIVE,
+        &[],
+        u8::from(metrics.smt_active.load(std::sync::atomic::Ordering::Relaxed)),
+    );
 
     // One series per state rather than a number standing for one, so a query reads as the word the
     // report uses and a state nothing is in is a zero rather than a gap.
