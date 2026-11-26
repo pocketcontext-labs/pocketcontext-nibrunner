@@ -182,7 +182,7 @@ async fn inspect(
         .current_dir(&jail.root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     jail.configure_command(&mut command)?;
     let mut child = command.spawn()?;
@@ -190,14 +190,35 @@ async fn inspect(
         .stdout
         .take()
         .ok_or_else(|| io::Error::other("missing guest console"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::other("missing VMM diagnostics"))?;
     let mut console = Vec::new();
+    let mut diagnostics = Vec::new();
     let result = tokio::time::timeout(Duration::from_secs(25), async {
-        pipe.take(MAX_CONSOLE + 1).read_to_end(&mut console).await?;
-        if console.len() > MAX_CONSOLE as usize {
-            return Err(io::Error::other("guest console exceeded its limit"));
+        let mut stdout = pipe.take(MAX_CONSOLE + 1);
+        let mut stderr = stderr.take(4097);
+        tokio::try_join!(
+            stdout.read_to_end(&mut console),
+            stderr.read_to_end(&mut diagnostics)
+        )?;
+        if console.len() > MAX_CONSOLE as usize || diagnostics.len() > 4096 {
+            return Err(io::Error::other("probe diagnostics exceeded their limit"));
         }
-        if !child.wait().await?.success() {
-            return Err(io::Error::other("the probe microVM did not shut down cleanly"));
+        let exit = child.wait().await?;
+        if !exit.success() {
+            // Only PID 1 and the VMM can write here; the tenant's stderr is /dev/null.
+            let vmm = String::from_utf8_lossy(&diagnostics);
+            let tail = String::from_utf8_lossy(&console);
+            let boot = tail
+                .lines()
+                .filter(|line| !line.starts_with(FRAME_PREFIX))
+                .next_back()
+                .unwrap_or("");
+            return Err(io::Error::other(format!(
+                "probe microVM exited with {exit}: {vmm} {boot}"
+            )));
         }
         Ok(())
     })
