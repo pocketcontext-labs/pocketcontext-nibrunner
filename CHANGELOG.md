@@ -1,5 +1,15 @@
 # Changelog
 
+## [2026.11.19] - 2026-11-26
+
+### Features
+
+- Checkpoint measured and billable awake seconds per deployment
+
+### Fixes
+
+- Bound manifest probes after the tenant starts
+
 ## [2026.11.18] - 2026-11-26
 
 ### Features
