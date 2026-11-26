@@ -37,7 +37,9 @@ fn inspect(length: Option<u64>) -> io::Result<Option<Vec<u8>>> {
         MsFlags::MS_NODEV | MsFlags::MS_NOSUID,
         Some("size=100M,mode=0755"),
     )?;
-    let mut payload = File::open("/dev/vdb")?.take(length);
+    let device = guest_contract::paths::CONFIG_DEVICE;
+    super::mounts::wait_for_device(device).map_err(io::Error::other)?;
+    let mut payload = File::open(device)?.take(length);
     let destination = "/tmp/binary";
     if io::copy(&mut payload, &mut File::create(destination)?)? != length {
         return Err(io::Error::other("incomplete probe input"));

@@ -340,7 +340,7 @@ pub(crate) fn working_directory(path: &str, uid: u32, gid: u32) -> Result<(), Mo
     })
 }
 
-fn wait_for_device(path: &str) -> Result<(), MountFailed> {
+pub(super) fn wait_for_device(path: &str) -> Result<(), MountFailed> {
     let started = Instant::now();
     let deadline = started + DEVICE_TIMEOUT;
     while Instant::now() < deadline {
