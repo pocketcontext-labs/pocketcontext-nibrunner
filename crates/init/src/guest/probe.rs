@@ -89,6 +89,7 @@ fn collect_output(mut child: Child, deadline: Instant) -> io::Result<Option<Vec<
     loop {
         if Instant::now() >= deadline || output.len() > MAX_OUTPUT_BYTES {
             let _ = child.kill();
+            let _ = child.wait();
             return Ok(None);
         }
         if !eof {
@@ -118,6 +119,7 @@ mod tests {
 
     #[test]
     fn a_running_nonmanifest_application_produces_a_definitive_result() {
+        let _guard = crate::guest::supervisor::tests::one_tenant_at_a_time();
         let child = Command::new("sleep")
             .arg("10")
             .stdout(Stdio::piped())
@@ -133,6 +135,7 @@ mod tests {
 
     #[test]
     fn a_signal_after_successful_spawn_is_a_definitive_probe_result() {
+        let _guard = crate::guest::supervisor::tests::one_tenant_at_a_time();
         let mut child = Command::new("sleep")
             .arg("10")
             .stdout(Stdio::piped())
@@ -147,6 +150,7 @@ mod tests {
 
     #[test]
     fn a_finished_manifest_still_returns_its_output() {
+        let _guard = crate::guest::supervisor::tests::one_tenant_at_a_time();
         let child = Command::new("echo")
             .arg("manifest")
             .stdout(Stdio::piped())
