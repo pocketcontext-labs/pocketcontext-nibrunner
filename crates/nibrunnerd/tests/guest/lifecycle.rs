@@ -741,7 +741,8 @@ async fn a_manifest_requires_an_isolated_clean_exit_and_releases_its_jail() {
     let Some(host) = crate::host().await else {
         return;
     };
-    let tenant = std::fs::read(std::env::var_os("NIBRUNNER_TEST_TENANT").unwrap()).unwrap();
+    let tenant =
+        std::fs::read(std::path::Path::new(&host.host.config.artifact_store_url).join("tenant")).unwrap();
     let area = tempfile::tempdir().unwrap();
     let binary = area.path().join("tenant");
     for (suffix, expected) in [
