@@ -190,6 +190,7 @@ mod tests {
         fields.guest_ipv4 = Some(Ipv4Address::parse("10.9.9.9").unwrap());
         fields.layer_digests = vec![Sha256Digest::parse("a".repeat(64)).unwrap()];
         fields.resources = InstanceResources {
+            cpu_quarters: None,
             vcpu_count: 4,
             memory_mib: 4_096,
         };

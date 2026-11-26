@@ -82,6 +82,7 @@ mod tests {
             capacity,
             allocatable: capacity,
             versions: HostVersions {
+                cpu_quarter_quota: false,
                 agent: "sha".into(),
                 guest_image: "6.1".into(),
                 zerofs: "none".into(),

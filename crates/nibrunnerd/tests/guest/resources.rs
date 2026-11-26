@@ -48,7 +48,13 @@ fn assert_limits(host: &RunningHost, app: &Tenant) -> PathBuf {
     let resources = app.instance.config.resources;
     assert_eq!(
         std::fs::read_to_string(path.join("cpu.max")).unwrap().trim(),
-        format!("{} 100000", u64::from(resources.vcpu_count) * 100_000)
+        format!(
+            "{} 100000",
+            resources
+                .cpu_quarters
+                .map_or(u64::from(resources.vcpu_count) * 100_000, |q| u64::from(q)
+                    * 25_000)
+        )
     );
     let memory = u64::from(resources.memory_mib) * BYTES_PER_MIB;
     assert_eq!(
@@ -97,6 +103,7 @@ async fn memory_survives_sleep_restore_and_redeployment(snapshot_directory: Opti
             .redeployed(&format!("{cpus}-{memory}"))
             .edited(|instance| {
                 instance.config.resources = InstanceResources {
+                    cpu_quarters: Some(if cpus == 1 { 1 } else { 5 }),
                     vcpu_count: cpus,
                     memory_mib: memory,
                 }

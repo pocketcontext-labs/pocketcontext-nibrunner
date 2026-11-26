@@ -973,6 +973,7 @@ mod schema {
             capacity,
             allocatable: capacity,
             versions: HostVersions {
+                cpu_quarter_quota: false,
                 agent: "0.1.0".into(),
                 guest_image: "2026.8.3-1".into(),
                 zerofs: "0.5.0".into(),

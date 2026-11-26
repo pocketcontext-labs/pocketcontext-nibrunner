@@ -102,7 +102,8 @@ impl Jailer {
             .map_err(io_error)?
             .ok_or_else(|| io_error("the jail has no staged inputs"))?;
         let (uid, gid) = self.identities(inputs.slot)?;
-        let limits = super::limits::VmLimits::for_machine(&inputs.config.machine_config)?;
+        let limits =
+            super::limits::VmLimits::with_cpu_quota(&inputs.config.machine_config, inputs.cpu_quarters)?;
         #[cfg(not(target_os = "linux"))]
         {
             let _ = (

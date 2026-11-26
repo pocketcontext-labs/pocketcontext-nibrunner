@@ -18,6 +18,17 @@ pub(crate) struct VmLimits {
 
 impl VmLimits {
     pub(crate) fn for_machine(machine: &MachineConfig) -> std::io::Result<Self> {
+        Self::with_cpu_quota(machine, None)
+    }
+
+    pub(crate) fn with_cpu_quota(machine: &MachineConfig, quarters: Option<u32>) -> std::io::Result<Self> {
+        let max_quarters = u64::from(machine.vcpu_count) * 4;
+        let quarters = quarters.map_or(max_quarters, u64::from);
+        if quarters == 0 || quarters > max_quarters {
+            return Err(std::io::Error::other(
+                "CPU quota must fit the configured guest vCPUs",
+            ));
+        }
         if machine.vcpu_count == 0 || machine.mem_size_mib == 0 {
             return Err(std::io::Error::other(
                 "a microVM needs positive CPU and memory resources",
@@ -28,7 +39,7 @@ impl VmLimits {
         let memory_max_bytes =
             guest_bytes + VMM_OVERHEAD_MIB * BYTES_PER_MIB + guest_bytes / MEMORY_OVERHEAD_DIVISOR;
         Ok(Self {
-            cpu_quota_us: u64::from(machine.vcpu_count) * CPU_PERIOD_US,
+            cpu_quota_us: quarters * (CPU_PERIOD_US / 4),
             memory_max_bytes,
             snapshot_memory_max_bytes: memory_max_bytes + guest_bytes,
         })
@@ -135,6 +146,17 @@ mod tests {
             vcpu_count,
             mem_size_mib,
             smt: false,
+        }
+    }
+
+    #[test]
+    fn quarter_cpu_quotas_fit_the_guest_topology() {
+        for q in 1..=8 {
+            let quota = VmLimits::with_cpu_quota(&machine(2, 256), Some(q)).unwrap();
+            assert_eq!(quota.cpu_quota_us, u64::from(q) * 25_000);
+        }
+        for q in [0, 5] {
+            assert!(VmLimits::with_cpu_quota(&machine(1, 256), Some(q)).is_err());
         }
     }
 

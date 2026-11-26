@@ -285,6 +285,7 @@ mod tests {
             allocatable_capacity(
                 &small,
                 &[InstanceResources {
+                    cpu_quarters: None,
                     vcpu_count: 4,
                     memory_mib: 8192
                 }],

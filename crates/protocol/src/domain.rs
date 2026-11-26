@@ -481,11 +481,15 @@ pub const DEFAULT_IDLE_TIMEOUT: IdleTimeoutMs = IdleTimeoutMs(DEFAULT_IDLE_TIMEO
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceResources {
+    /// Optional host CPU quota in quarter-core units. Guest topology remains integral.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_quarters: Option<u32>,
     pub vcpu_count: u32,
     pub memory_mib: u32,
 }
 
 pub const DEFAULT_INSTANCE_RESOURCES: InstanceResources = InstanceResources {
+    cpu_quarters: None,
     vcpu_count: 1,
     memory_mib: 256,
 };
@@ -665,6 +669,9 @@ pub enum ExportState {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HostVersions {
+    /// This host can enforce an instance CPU quota in quarter-core units.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cpu_quarter_quota: bool,
     pub agent: String,
     pub guest_image: String,
     pub zerofs: String,

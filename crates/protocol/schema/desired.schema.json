@@ -792,6 +792,15 @@
     "InstanceResources": {
       "type": "object",
       "properties": {
+        "cpuQuarters": {
+          "description": "Optional host CPU quota in quarter-core units. Guest topology remains integral.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
         "memoryMib": {
           "type": "integer",
           "format": "uint32",

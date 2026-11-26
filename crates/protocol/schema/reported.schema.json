@@ -303,6 +303,10 @@
         "agent": {
           "type": "string"
         },
+        "cpuQuarterQuota": {
+          "description": "This host can enforce an instance CPU quota in quarter-core units.",
+          "type": "boolean"
+        },
         "firecracker": {
           "type": "string"
         },

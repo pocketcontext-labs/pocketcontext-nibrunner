@@ -16,12 +16,18 @@ pub(crate) struct Input {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Inputs {
+    pub(crate) cpu_quarters: Option<u32>,
     pub(crate) slot: u32,
     pub(crate) files: Vec<Input>,
     pub(crate) config: FirecrackerConfig,
 }
 
-pub(crate) fn stage(directory: &Path, slot: u32, mut config: FirecrackerConfig) -> Result<(), StoreError> {
+pub(crate) fn stage(
+    directory: &Path,
+    slot: u32,
+    cpu_quarters: Option<u32>,
+    mut config: FirecrackerConfig,
+) -> Result<(), StoreError> {
     let mut files = vec![Input {
         source: PathBuf::from(&config.boot_source.kernel_image_path),
         name: "kernel".into(),
@@ -36,7 +42,15 @@ pub(crate) fn stage(directory: &Path, slot: u32, mut config: FirecrackerConfig) 
         });
         drive.path_on_host = format!("/assets/{}", drive.drive_id);
     }
-    write_json(&directory.join(INPUTS_FILENAME), &Inputs { slot, files, config })
+    write_json(
+        &directory.join(INPUTS_FILENAME),
+        &Inputs {
+            slot,
+            files,
+            config,
+            cpu_quarters,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -74,11 +88,12 @@ mod tests {
     fn staged_inputs_preserve_host_assets_and_translate_the_config_without_sharing_another_volume() {
         let directory = tempfile::tempdir().unwrap();
         let host_config = config();
-        stage(directory.path(), 7, host_config.clone()).unwrap();
+        stage(directory.path(), 7, Some(3), host_config.clone()).unwrap();
         let inputs: Inputs = crate::json_store::read_json(&directory.path().join(INPUTS_FILENAME))
             .unwrap()
             .unwrap();
         assert_eq!(inputs.slot, 7);
+        assert_eq!(inputs.cpu_quarters, Some(3));
         assert_eq!(inputs.config.boot_source.kernel_image_path, "/assets/kernel");
         assert_eq!(host_config.boot_source.kernel_image_path, "/guest/kernel");
         assert_eq!(inputs.files.iter().filter(|input| !input.read_only).count(), 1);
