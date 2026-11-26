@@ -14,7 +14,7 @@ use super::{jailer, jailer_inputs, manager, process};
 use crate::config::HostConfig;
 use crate::install::jailer_identities;
 
-const PROBE_DIRECTORY: &str = "/run/nibrunner-manifest";
+const LOCK_DIRECTORY: &str = "/run/nibrunner-manifest";
 const CGROUP_PARENT: &str = "nibrunner-manifest";
 const MAX_CONSOLE: u64 = 96 * 1024;
 
@@ -112,7 +112,7 @@ async fn clear_group(group: &Path) -> io::Result<()> {
 
 pub async fn run(config: &HostConfig, binary: &Path, digest: &str) -> Result<Vec<u8>, Error> {
     crate::host_security::check(&config.host_security).map_err(io::Error::other)?;
-    let root = Path::new(PROBE_DIRECTORY);
+    let root = Path::new(LOCK_DIRECTORY);
     crate::json_store::make_directory(root, 0o700)?;
     let lock = File::options()
         .create(true)
@@ -129,7 +129,9 @@ pub async fn run(config: &HostConfig, binary: &Path, digest: &str) -> Result<Vec
         .join(CGROUP_PARENT)
         .join(jailer::jail_id(&app));
     clear_group(&group).await?;
-    let directory = root.join("work");
+    // The jailer creates /dev/kvm in its chroot. /run commonly uses nodev; use the
+    // configured state filesystem that backs this host’s ordinary Firecracker jails.
+    let directory = config.state_dir.join("manifest-probe");
     if directory.exists() {
         fs::remove_dir_all(&directory)?;
     }

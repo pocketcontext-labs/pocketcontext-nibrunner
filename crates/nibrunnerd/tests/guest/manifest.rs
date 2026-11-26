@@ -26,7 +26,7 @@ async fn a_manifest_requires_an_isolated_clean_exit_and_releases_its_jail() {
         } else {
             assert_eq!(result.unwrap_err().exit_code(), expected);
         }
-        assert!(!std::path::Path::new("/run/nibrunner-manifest/work").exists());
+        assert!(!host.host.config.state_dir.join("manifest-probe").exists());
     }
     host.stop().await;
 }
