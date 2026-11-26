@@ -20,6 +20,7 @@ use crate::ports::{ArtifactStore, CommandRunner, PayloadBuilder, Vmm};
 use crate::state::SharedState;
 
 pub struct Host {
+    pub(crate) persist_lock: Mutex<()>,
     pub cron: Arc<crate::domain::cron::registry::CronRegistry>,
     pub cron_execution: Arc<dyn crate::ports::CronExecution>,
     pub cron_runs: Arc<crate::domain::cron::runs::CronRuns>,
@@ -119,6 +120,7 @@ impl Host {
     }
 
     async fn write_down(&self) -> Result<(), crate::domain::store::StoreError> {
+        let _persist = self.persist_lock.lock().await;
         let snapshot = self.state.snapshot().await;
         let records: Vec<_> = snapshot.records.values().cloned().collect();
         let (assignments, cursor) = {

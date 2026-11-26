@@ -7,4 +7,10 @@ The file the host writes to `reported.json` in `paths.state_dir` after every rec
 metrics page is built from the same data. A control plane that reads only this file learns the
 result of its last write to `desired.json`, and the reason for any failure.
 
+Each instance includes an `awakeCounter` for its deployment. `measuredSeconds` counts
+observed running time on the host's monotonic clock. `billableSeconds` excludes time spent
+attempting a suspend or stop. Both accumulate through sleep and wake and are checkpointed
+in the host database. A consumer can charge the increase since its last observation for
+the same host, app and deployment. Older hosts omit the counter.
+
 <SchemaReference file="crates/protocol/schema/reported.schema.json" />

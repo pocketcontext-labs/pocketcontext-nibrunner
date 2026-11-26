@@ -220,6 +220,7 @@ pub fn desired_export(edit: impl FnOnce(&mut DesiredExport)) -> DesiredExport {
 
 pub fn reported_instance(edit: impl FnOnce(&mut ReportedInstance)) -> ReportedInstance {
     let mut value = ReportedInstance {
+        awake_counter: None,
         compute: None,
         app_id: app_id(),
         deployment_id: deployment_id(),
@@ -506,6 +507,7 @@ async fn test_host_over(
         config.logs.keep_bytes_per_app,
     ));
     let host = Arc::new(Host {
+        persist_lock: Default::default(),
         cron,
         cron_execution: Arc::new(crate::adapters::cron_execution::VsockCronExecution::new(
             logs.clone(),

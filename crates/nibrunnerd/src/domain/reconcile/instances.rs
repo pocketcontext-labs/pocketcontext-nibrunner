@@ -139,6 +139,7 @@ pub async fn stop_instance(host: &Host, app_id: &AppId, reason: &str) {
     }
     host.state
         .update_record(app_id, |record| {
+            record.awake_meter.set_billable(false);
             record.state = InstanceState::Stopping;
             record.stop_requested = true;
         })
@@ -146,12 +147,21 @@ pub async fn stop_instance(host: &Host, app_id: &AppId, reason: &str) {
     host.close_http_connections_to(app_id).await;
     host.activator.close_connections_to(app_id).await;
     settled(host, app_id, reason).await;
-    match host.vms.stop(app_id).await {
-        Ok(()) => tracing::info!(%app_id, reason, "instance stopped"),
-        Err(error) => tracing::error!(%app_id, reason, error = %error.message(), "instance stop failed"),
-    }
+    let stopped = match host.vms.stop(app_id).await {
+        Ok(()) => {
+            tracing::info!(%app_id, reason, "instance stopped");
+            true
+        }
+        Err(error) => {
+            tracing::error!(%app_id, reason, error = %error.message(), "instance stop failed");
+            false
+        }
+    };
     host.state
         .update_record(app_id, |record| {
+            if stopped {
+                record.awake_meter.observe(false, false);
+            }
             record.state = InstanceState::Stopped;
             record.start_attempts = NO_START_ATTEMPTS;
         })
@@ -196,6 +206,7 @@ pub async fn suspend_instance(host: &Host, app_id: &AppId, why: SleepReason) -> 
         Ok(()) => {
             host.state
                 .update_record(app_id, |record| {
+                    record.awake_meter.observe(false, false);
                     record.state = InstanceState::Idle;
                     record.stop_requested = true;
                     record.start_attempts = NO_START_ATTEMPTS;
@@ -570,6 +581,7 @@ async fn boot_instance(host: &Host, desired: &DesiredInstance, reason: BootReaso
             let booted_at = started_at.epoch_ms();
             host.state
                 .update_record(&desired.app_id, |record| {
+                    record.awake_meter.observe(true, true);
                     record.started_at = Some(started_at);
                     record.state = InstanceState::Starting;
                     record.health = initial_tracker();
@@ -652,6 +664,7 @@ pub async fn resume_instance(host: &Host, desired: &DesiredInstance) -> Result<W
             host.state
                 .update_record(&desired.app_id, |record| {
                     record.state = InstanceState::Starting;
+                    record.awake_meter.observe(true, true);
                     record.started_at = Some(started_at);
                     record.stop_requested = false;
                     record.message = None;
@@ -764,6 +777,22 @@ async fn settle(
     snapshotting: bool,
     now_ms: i64,
 ) {
+    host.state
+        .modify(|snapshot| {
+            let saving = snapshot.snapshotting.contains(&record.app_id);
+            if let Some(latest) = snapshot.records.get_mut(&record.app_id) {
+                if latest.has_same_start(&record) && latest.state == record.state && saving == snapshotting {
+                    if status.active {
+                        latest
+                            .awake_meter
+                            .observe(true, !saving && !latest.stop_requested);
+                    } else {
+                        latest.awake_meter.lost();
+                    }
+                }
+            }
+        })
+        .await;
     // A live VMM can precede guest networking; an early TCP connect can wait for a SYN retransmission.
     let health = if status.active && due && !host.state.has_guest_start(&record.app_id) {
         let probed = std::time::Instant::now();

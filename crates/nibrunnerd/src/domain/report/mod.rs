@@ -1,3 +1,4 @@
+pub(crate) mod awake;
 pub mod build_report;
 pub mod capacity;
 pub mod instance_record;

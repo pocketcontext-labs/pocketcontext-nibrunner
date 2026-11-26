@@ -171,6 +171,11 @@ impl HostState {
     pub async fn put_record(&self, mut record: InstanceRecord) {
         let mut snapshot = self.snapshot.write().await;
         if let Some(previous) = snapshot.records.get(&record.app_id) {
+            if previous.deployment_id == record.deployment_id {
+                record.awake_meter.clone_from(&previous.awake_meter);
+            } else {
+                record.awake_meter = Default::default();
+            }
             if previous.deployment_id == record.deployment_id && previous.last_hook.is_some() {
                 record.last_hook.clone_from(&previous.last_hook);
             }
@@ -199,6 +204,9 @@ impl HostState {
 
     pub async fn mark_snapshotting(&self, app_id: &AppId, active: bool) {
         let mut snapshot = self.snapshot.write().await;
+        if let Some(record) = snapshot.records.get_mut(app_id) {
+            record.awake_meter.set_billable(!active);
+        }
         if active {
             snapshot.snapshotting.insert(app_id.clone());
         } else {

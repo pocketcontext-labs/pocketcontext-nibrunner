@@ -543,7 +543,17 @@ pub struct ReportedHook {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct AwakeCounter {
+    pub measured_seconds: u64,
+    pub billable_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct ReportedInstance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awake_counter: Option<AwakeCounter>,
     pub app_id: AppId,
     pub deployment_id: DeploymentId,
     pub state: InstanceState,

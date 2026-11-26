@@ -571,6 +571,7 @@ fn identifiers_timestamps_and_addresses_are_checked() {
 #[test]
 fn a_report_keeps_unknown_compute_null_and_omits_unknown_optional_details() {
     let instance = ReportedInstance {
+        awake_counter: None,
         compute: None,
         app_id: AppId::parse("app-1").unwrap(),
         deployment_id: DeploymentId::parse("dep-1").unwrap(),
@@ -990,6 +991,7 @@ mod schema {
                 message: Some(StateMessage::new("mounted")),
             }],
             instances: vec![ReportedInstance {
+                awake_counter: None,
                 compute: None,
                 app_id: AppId::parse("app-1").unwrap(),
                 deployment_id: DeploymentId::parse("dep-1").unwrap(),

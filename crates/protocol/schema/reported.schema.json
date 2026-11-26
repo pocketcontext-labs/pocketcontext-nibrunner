@@ -112,6 +112,25 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$"
     },
+    "AwakeCounter": {
+      "type": "object",
+      "properties": {
+        "billableSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "measuredSeconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "measuredSeconds",
+        "billableSeconds"
+      ]
+    },
     "CheckpointId": {
       "description": "an identifier",
       "type": "string",
@@ -520,6 +539,16 @@
       "properties": {
         "appId": {
           "$ref": "#/$defs/AppId"
+        },
+        "awakeCounter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AwakeCounter"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "compute": {
           "anyOf": [

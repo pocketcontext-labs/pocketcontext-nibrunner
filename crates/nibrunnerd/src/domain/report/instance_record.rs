@@ -20,6 +20,8 @@ pub struct RecordPort {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstanceRecord {
+    #[serde(default)]
+    pub(crate) awake_meter: super::awake::AwakeMeter,
     pub app_id: AppId,
     pub deployment_id: DeploymentId,
     pub volume_id: VolumeId,
@@ -101,6 +103,7 @@ impl InstanceRecord {
     }
     pub fn new(fields: RecordFields, state: InstanceState, health: HealthTracker) -> Self {
         Self {
+            awake_meter: Default::default(),
             app_id: fields.app_id,
             deployment_id: fields.deployment_id,
             volume_id: fields.volume_id,
@@ -132,6 +135,7 @@ impl InstanceRecord {
 
     pub fn adopt(&mut self, fields: RecordFields) {
         if self.deployment_id != fields.deployment_id {
+            self.awake_meter = Default::default();
             self.last_hook = None;
         }
         self.deployment_id = fields.deployment_id;
