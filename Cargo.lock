@@ -1982,6 +1982,7 @@ dependencies = [
 name = "nibrunner-init"
 version = "2026.11.17"
 dependencies = [
+ "hex",
  "libc",
  "nibrunner-guest-contract",
  "nibrunner-protocol",

@@ -166,3 +166,15 @@ admits five submissions per minute per app and per mailbox, counting failures to
 Limits cover one daemon lifetime. At most 16 SMTP submissions run concurrently.
 
 The daemon reads rotating tokens from `NIBRUN_IDENTITY_SOURCE_DIR` when set in its service environment. The default source directory is `/run/drop-m1/identities`.
+
+## Inspect a release manifest
+
+On an installed host with a matching guest image, an operator can inspect a release whose SHA-256 they have approved:
+
+```sh
+nibrunnerd probe-manifest --binary ./release --sha256 "$approved_sha256"
+```
+
+The command verifies a private copy of the executable (up to 90 MiB), then starts a disposable jailed microVM with one vCPU and 512 MiB RAM. The guest receives a read-only system image and the executable. It has no network interface, vsock, customer volume or infrastructure credentials. Guest init runs the executable once with `--drop-manifest` as an unprivileged process in an empty filesystem containing only the binary.
+
+Exit 0 returns the executable’s JSON object on stdout (up to 16 KiB). Exit 3 means the executable returned a failure status or invalid output. Exit 1 means inspection did not establish a result, including a digest mismatch, occupied inspector or timeout. Retry transient inspection failures. A caller may cache the declaration against the approved digest and inspection contract. The caller controls authorization and checks deployment feasibility independently.

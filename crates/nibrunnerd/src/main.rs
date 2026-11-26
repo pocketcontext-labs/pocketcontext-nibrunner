@@ -38,6 +38,21 @@ fn main() -> std::process::ExitCode {
     };
 
     match command {
+        #[cfg(target_os = "linux")]
+        Some(Command::ProbeManifest { binary, sha256, .. }) => {
+            use nibrunnerd::adapters::vm::probe;
+            use std::io::Write;
+            match runtime.block_on(probe::run(&config, &binary, &sha256)) {
+                Ok(output) => match std::io::stdout().lock().write_all(&output) {
+                    Ok(()) => std::process::ExitCode::SUCCESS,
+                    Err(_) => std::process::ExitCode::FAILURE,
+                },
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::ExitCode::from(error.exit_code())
+                }
+            }
+        }
         Some(Command::CronWorker { socket }) => {
             match runtime.block_on(nibrunnerd::adapters::cron_worker::serve(config, socket)) {
                 Ok(()) => std::process::ExitCode::SUCCESS,
@@ -160,7 +175,7 @@ fn configuration(command: Option<&Command>) -> Result<(HostConfig, Origin), std:
             None | Some(Command::CronWorker { .. } | Command::HttpWorker { .. }) => {
                 tracing::error!(error = %error.message(), "this host is not configured")
             }
-            Some(Command::Install { .. } | Command::Start { .. } | Command::Storage { .. }) => {
+            _ => {
                 eprintln!("this host is not configured: {}", error.message())
             }
         }
@@ -182,6 +197,15 @@ fn configuration(command: Option<&Command>) -> Result<(HostConfig, Origin), std:
         };
     }
 
+    #[cfg(target_os = "linux")]
+    if let Some(Command::ProbeManifest {
+        config: Some(path), ..
+    }) = command
+    {
+        return HostConfig::from_file(path)
+            .map(|config| (config, Origin::Operator))
+            .map_err(|error| refused(&error));
+    }
     let path = HostConfig::configured_file();
     match HostConfig::load() {
         Ok(config) => Ok((config, Origin::Operator)),

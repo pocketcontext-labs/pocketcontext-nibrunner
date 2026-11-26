@@ -60,6 +60,26 @@ fn settings() -> Settings {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--drop-manifest") {
+        assert!(std::env::vars_os().next().is_none());
+        for path in ["/dev", "/proc", "/sys", "/app/data"] {
+            assert!(!Path::new(path).exists(), "{path} reached the probe");
+        }
+        let bytes = std::fs::read("/binary").unwrap();
+        if bytes.ends_with(b":probe-hang") {
+            std::thread::sleep(Duration::from_secs(120));
+        }
+        if bytes.ends_with(b":probe-flood") {
+            println!("{}", "a".repeat(20 * 1024));
+            return;
+        }
+        println!(r#"{{"app":"test-tenant"}}"#);
+        if bytes.ends_with(b":probe-fail") {
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let settings = settings();
     if let Some(delay) = settings.exit_after {
         std::thread::spawn(move || {

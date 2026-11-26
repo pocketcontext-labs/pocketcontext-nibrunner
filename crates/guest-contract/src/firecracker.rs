@@ -104,7 +104,8 @@ pub struct FirecrackerConfig {
     pub machine_config: MachineConfig,
     #[serde(rename = "network-interfaces")]
     pub network_interfaces: Vec<NetworkInterface>,
-    pub vsock: VsockDevice,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vsock: Option<VsockDevice>,
     pub balloon: BalloonConfig,
 }
 
@@ -134,6 +135,33 @@ fn read_only_drive(drive_id: &str, path_on_host: &str, is_root_device: bool) -> 
         is_read_only: true,
         cache_type: CacheType::Unsafe,
         io_engine: IoEngine::Sync,
+    }
+}
+
+/// A probe receives only immutable inputs. Its PID 1 returns the child's output on the serial console.
+pub fn render_manifest_probe(kernel: String, rootfs: &str, binary: &str, length: u64) -> FirecrackerConfig {
+    FirecrackerConfig {
+        boot_source: BootSource {
+            kernel_image_path: kernel,
+            boot_args: format!("{BASE_KERNEL_ARGS} -- {} {length}", crate::probe::INIT_ARGUMENT),
+        },
+        drives: vec![
+            read_only_drive("rootfs", rootfs, true),
+            read_only_drive("probe", binary, false),
+        ],
+        machine_config: MachineConfig {
+            vcpu_count: 1,
+            mem_size_mib: 512,
+            smt: false,
+        },
+        network_interfaces: Vec::new(),
+        vsock: None,
+        balloon: BalloonConfig {
+            amount_mib: 0,
+            deflate_on_oom: false,
+            stats_polling_interval_s: 0,
+            free_page_reporting: true,
+        },
     }
 }
 
@@ -185,10 +213,10 @@ pub fn render_firecracker_config(
             host_dev_name: network.tap_name.clone(),
             guest_mac: network.guest_mac.clone(),
         }],
-        vsock: VsockDevice {
+        vsock: Some(VsockDevice {
             guest_cid: vsock.guest_cid,
             uds_path: vsock.path.clone(),
-        },
+        }),
     }
 }
 
@@ -320,10 +348,10 @@ mod tests {
         assert_eq!(rendered.network_interfaces[0].host_dev_name, "nbr3");
         assert_eq!(
             rendered.vsock,
-            VsockDevice {
+            Some(VsockDevice {
                 guest_cid: 6,
                 uds_path: "logs.vsock".into()
-            }
+            })
         );
         let json = serde_json::to_value(&rendered).unwrap();
         assert!(json.get("boot-source").is_some());

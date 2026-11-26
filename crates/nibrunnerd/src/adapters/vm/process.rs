@@ -234,23 +234,7 @@ impl VmProcesses {
             .nth(3)
             .ok_or_else(|| std::io::Error::other("the jail has no base directory"))?;
         std::os::unix::fs::symlink(jail.root.join("api.sock"), &api_socket)?;
-        let mut command = tokio::process::Command::new(&jailer.binary);
-        command
-            .arg("--id")
-            .arg(super::jailer::jail_id(app_id))
-            .arg("--exec-file")
-            .arg(binary)
-            .arg("--uid")
-            .arg(jail.uid.to_string())
-            .arg("--gid")
-            .arg(jail.gid.to_string())
-            .arg("--chroot-base-dir")
-            .arg(base)
-            .arg("--cgroup-version")
-            .arg("2")
-            .arg("--parent-cgroup")
-            .arg(super::limits::CGROUP_PARENT);
-        jail.limits.configure(&mut command);
+        let mut command = jail.command(jailer, binary, app_id, base, super::limits::CGROUP_PARENT);
         command.arg("--").arg("--api-sock").arg("/api.sock");
         if boot {
             command.arg("--config-file").arg("/firecracker.json");

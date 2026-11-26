@@ -14,6 +14,16 @@ pub(super) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(super) enum Command {
+    #[cfg(target_os = "linux")]
+    #[command(about = "Read the manifest of a digest-approved executable in a disposable microVM")]
+    ProbeManifest {
+        #[arg(long)]
+        binary: PathBuf,
+        #[arg(long, value_name = "HEX")]
+        sha256: String,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     #[command(hide = true)]
     CronWorker {
         #[arg(long)]

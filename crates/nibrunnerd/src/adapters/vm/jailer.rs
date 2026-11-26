@@ -190,6 +190,34 @@ impl Jailer {
 }
 
 impl Jail {
+    pub(crate) fn command(
+        &self,
+        jailer: &Jailer,
+        binary: &Path,
+        app_id: &AppId,
+        base: &Path,
+        parent_cgroup: &str,
+    ) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(&jailer.binary);
+        command
+            .arg("--id")
+            .arg(super::jailer::jail_id(app_id))
+            .arg("--exec-file")
+            .arg(binary)
+            .arg("--uid")
+            .arg(self.uid.to_string())
+            .arg("--gid")
+            .arg(self.gid.to_string())
+            .arg("--chroot-base-dir")
+            .arg(base)
+            .arg("--cgroup-version")
+            .arg("2")
+            .arg("--parent-cgroup")
+            .arg(parent_cgroup);
+        self.limits.configure(&mut command);
+        command
+    }
+
     #[cfg(test)]
     pub(crate) fn for_testing(root: PathBuf) -> Self {
         use std::os::unix::fs::MetadataExt;

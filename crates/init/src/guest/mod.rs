@@ -6,6 +6,7 @@ mod identity;
 mod logs;
 mod memory;
 mod mounts;
+mod probe;
 mod s3_bridge;
 mod startup;
 mod supervisor;
@@ -23,6 +24,11 @@ pub(crate) fn run() -> ExitCode {
         return shutdown(None);
     }
     adopt_console();
+    let mut arguments = std::env::args().skip(1);
+    if arguments.next().as_deref() == Some(guest_contract::probe::INIT_ARGUMENT) {
+        probe::run(arguments.next().and_then(|size| size.parse().ok()));
+        return shutdown(None);
+    }
     log("guest runtime starting");
     startup::initialize();
 

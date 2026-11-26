@@ -6,6 +6,8 @@ pub(crate) mod jailer_inputs;
 pub mod layers;
 pub(crate) mod limits;
 pub mod manager;
+#[cfg(target_os = "linux")]
+pub mod probe;
 pub mod process;
 pub(crate) mod sign_in_email;
 pub mod snapshot;
