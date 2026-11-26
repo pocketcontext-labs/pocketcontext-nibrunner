@@ -159,7 +159,8 @@ async fn inspect(
         &image.display().to_string(),
         length,
     );
-    jailer_inputs::stage(work, nft_render::most_apps_the_ports_fit(), machine).map_err(io::Error::other)?;
+    jailer_inputs::stage(work, nft_render::most_apps_the_ports_fit(), None, machine)
+        .map_err(io::Error::other)?;
     let binary = process::extract_firecracker(work)?;
     let jailer = jailer::Jailer::new(process::extract_jailer(work)?, identities);
     let base: PathBuf = work.join("jails");
