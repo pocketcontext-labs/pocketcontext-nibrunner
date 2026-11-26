@@ -126,7 +126,7 @@ jobs:
           - shard: idle+isolation+resources
             families: idle isolation resources
           - shard: lifecycle+volumes+tenant+raw
-            families: manifest lifecycle volumes tenant raw
+            families: lifecycle volumes tenant raw
     steps:
       - name: Checkout Code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -158,6 +158,10 @@ jobs:
 
       - name: Build the tests
         run: just integration-guest --build-only
+
+      - name: Probe a manifest in a disposable microVM
+        if: contains(matrix.families, 'lifecycle')
+        run: just integration-guest 'manifest::'
 
       - name: Run the tests
         env:

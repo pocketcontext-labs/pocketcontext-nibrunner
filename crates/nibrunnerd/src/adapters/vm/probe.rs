@@ -215,8 +215,7 @@ async fn inspect(
             let tail = String::from_utf8_lossy(&console);
             let boot = tail
                 .lines()
-                .filter(|line| !line.starts_with(FRAME_PREFIX))
-                .next_back()
+                .rfind(|line| !line.starts_with(FRAME_PREFIX))
                 .unwrap_or("");
             return Err(io::Error::other(format!(
                 "probe microVM exited with {exit}: {vmm} {boot}"
