@@ -3,10 +3,12 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use guest_contract::paths::{TENANT_GID, TENANT_UID};
 use guest_contract::probe::{FRAME_PREFIX, MAX_BINARY_BYTES, MAX_OUTPUT_BYTES};
+use nix::fcntl::{fcntl, FcntlArg, OFlag};
 use nix::mount::{mount, MsFlags};
 
 pub(super) fn run(length: Option<u64>) {
@@ -15,7 +17,7 @@ pub(super) fn run(length: Option<u64>) {
         std::thread::sleep(std::time::Duration::from_secs(15));
         unsafe { libc::reboot(libc::RB_AUTOBOOT) };
     });
-    let result = match inspect(length) {
+    let result = match inspect(length, Instant::now() + Duration::from_secs(12)) {
         Ok(Some(output)) => format!("ok {} {}", output.len(), hex::encode(output)),
         Ok(None) => "invalid".into(),
         Err(_) => "unavailable".into(),
@@ -26,7 +28,7 @@ pub(super) fn run(length: Option<u64>) {
     unsafe { libc::tcdrain(libc::STDOUT_FILENO) };
 }
 
-fn inspect(length: Option<u64>) -> io::Result<Option<Vec<u8>>> {
+fn inspect(length: Option<u64>, deadline: Instant) -> io::Result<Option<Vec<u8>>> {
     let length = length
         .filter(|n| (1..=MAX_BINARY_BYTES).contains(n))
         .ok_or_else(|| io::Error::other("invalid probe length"))?;
@@ -68,26 +70,91 @@ fn inspect(length: Option<u64>) -> io::Result<Option<Vec<u8>>> {
             Ok(())
         });
     }
-    let mut child = match command.spawn() {
+    let child = match command.spawn() {
         Ok(child) => child,
         Err(error) if error.raw_os_error() == Some(libc::ENOEXEC) => return Ok(None),
         Err(error) => return Err(error),
     };
-    let mut output = Vec::new();
-    child
+    collect_output(child, deadline.min(Instant::now() + Duration::from_secs(4)))
+}
+
+fn collect_output(mut child: Child, deadline: Instant) -> io::Result<Option<Vec<u8>>> {
+    let mut pipe = child
         .stdout
         .take()
-        .ok_or_else(|| io::Error::other("missing probe output pipe"))?
-        .take(MAX_OUTPUT_BYTES as u64 + 1)
-        .read_to_end(&mut output)?;
-    if output.len() > MAX_OUTPUT_BYTES {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Ok(None);
+        .ok_or_else(|| io::Error::other("missing probe output pipe"))?;
+    fcntl(&pipe, FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
+    let mut output = Vec::new();
+    let mut eof = false;
+    loop {
+        if Instant::now() >= deadline || output.len() > MAX_OUTPUT_BYTES {
+            let _ = child.kill();
+            return Ok(None);
+        }
+        if !eof {
+            let remaining = (MAX_OUTPUT_BYTES + 1 - output.len()) as u64;
+            match pipe.by_ref().take(remaining).read_to_end(&mut output) {
+                Ok(_) if output.len() > MAX_OUTPUT_BYTES => continue,
+                Ok(_) => eof = true,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if let Some(status) = child.try_wait()? {
+            if !status.success() {
+                return Ok(None);
+            }
+            if eof {
+                return Ok(Some(output));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    match child.wait()?.code() {
-        Some(0) => Ok(Some(output)),
-        Some(_) => Ok(None),
-        None => Err(io::Error::other("probe child was interrupted")),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_running_nonmanifest_application_produces_a_definitive_result() {
+        let child = Command::new("sleep")
+            .arg("10")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let now = Instant::now();
+        assert_eq!(
+            collect_output(child, now + Duration::from_millis(40)).unwrap(),
+            None
+        );
+        assert!(now.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_signal_after_successful_spawn_is_a_definitive_probe_result() {
+        let mut child = Command::new("sleep")
+            .arg("10")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.kill().unwrap();
+        assert_eq!(
+            collect_output(child, Instant::now() + Duration::from_secs(3)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_finished_manifest_still_returns_its_output() {
+        let child = Command::new("echo")
+            .arg("manifest")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        assert_eq!(
+            collect_output(child, Instant::now() + Duration::from_secs(3)).unwrap(),
+            Some(b"manifest\n".to_vec())
+        );
     }
 }

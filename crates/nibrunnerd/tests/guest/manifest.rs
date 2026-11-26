@@ -14,7 +14,7 @@ async fn a_manifest_requires_an_isolated_clean_exit_and_releases_its_jail() {
         ("", 0),
         (":probe-fail", 3),
         (":probe-flood", 3),
-        (":probe-hang", 1),
+        (":probe-hang", 3),
         ("", 0),
     ] {
         let bytes = [tenant.as_slice(), suffix.as_bytes()].concat();
