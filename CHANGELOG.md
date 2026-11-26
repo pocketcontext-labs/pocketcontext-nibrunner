@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026.11.18] - 2026-11-26
+
+### Features
+
+- Inspect approved binary manifests in a disposable microVM
+- Enforce fractional CPU quotas on boot and restore
+
+### Fixes
+
+- Stage the probe jail on the device-enabled state filesystem
+- Retain bounded startup diagnostics for a failed probe
+- Stage the probe with its full vCPU budget
+- Wait for the probe drive before reading its payload
+
+### Maintenance
+
+- Report the manifest KVM check independently
+- Inspect the guest fixture staged by the host
+
 ## [2026.11.17] - 2026-11-25
 
 ### Features
