@@ -28,7 +28,7 @@ pub struct ZerofsFilesystem {
     pub storage_prefix: ObjectKey,
     pub mount_path: PathBuf,
     pub nbd_socket_path: PathBuf,
-    pub readers: crate::domain::exports::reader::CheckpointServers,
+    pub readers: Option<crate::domain::exports::reader::CheckpointServers>,
     pub binary: PathBuf,
     pub config_file: PathBuf,
 }
@@ -41,13 +41,13 @@ impl ZerofsFilesystem {
             nbd_socket_path: settings.nbd_socket_path.clone(),
             binary: settings.binary.clone(),
             config_file: settings.config_file.clone(),
-            readers: crate::domain::exports::reader::CheckpointServers {
+            readers: Some(crate::domain::exports::reader::CheckpointServers {
                 binary: settings.binary.clone(),
                 config_file: settings.checkpoint_config_file.clone(),
                 runtime_dir: settings.checkpoint_runtime_dir.clone(),
                 cache_dir: settings.checkpoint_cache_dir.clone(),
                 ready_timeout: crate::domain::exports::reader::DEFAULT_READY_TIMEOUT,
-            },
+            }),
         }
     }
 
@@ -84,10 +84,29 @@ impl ZerofsVolumes {
         }
     }
 
+    pub(super) fn filesystem(&self) -> &ZerofsFilesystem {
+        &self.filesystem
+    }
+
+    pub(super) fn on_filesystem(&self, filesystem: ZerofsFilesystem) -> Self {
+        Self::new(
+            filesystem,
+            self.allocator.clone(),
+            self.commands.clone(),
+            self.contents.clone(),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn with_devices(mut self, devices: NbdDevices) -> Self {
         self.devices = devices;
         self
+    }
+
+    pub(super) async fn checkpoint_inventory(
+        &self,
+    ) -> Result<super::customer::checkpoints::Inventory, VolumeError> {
+        super::customer::checkpoints::inventory(&self.admin(&["checkpoint", "list"]).await?)
     }
 
     async fn admin(&self, args: &[&str]) -> Result<String, VolumeError> {
@@ -99,7 +118,13 @@ impl ZerofsVolumes {
         self.commands
             .stdout_of(CommandRequest::new(&command))
             .await
-            .map_err(|error| VolumeError::Unusable(error.message()))
+            .map_err(|error| {
+                if self.dedicated() {
+                    VolumeError::Unusable("the customer writer refused its admin operation".into())
+                } else {
+                    VolumeError::Unusable(error.message())
+                }
+            })
     }
 
     async fn device_for(&self, app_id: &protocol::AppId) -> Option<String> {
@@ -110,7 +135,77 @@ impl ZerofsVolumes {
             .map(|slot| slot.nbd_device_path)
     }
 
+    pub(super) async fn quiesce_source(
+        &self,
+        volume: &VolumeId,
+        app: &protocol::AppId,
+    ) -> Result<(), VolumeError> {
+        if let Some(device) = self.device_for(app).await {
+            if self.devices.migration_attached(&device)? {
+                let image = self.filesystem.device_file_for(volume);
+                let socket = self.filesystem.nbd_socket_path.to_string_lossy();
+                let target = NbdTarget {
+                    socket_path: &socket,
+                    device_path: &device,
+                    volume_id: volume,
+                    image_path: Some(&image),
+                };
+                if self.devices.is_customer_client(&device) || self.devices.proven(&target).await.is_none() {
+                    return Err(VolumeError::Unusable(
+                        "the shared device does not prove it holds the migration source".into(),
+                    ));
+                }
+                let path = device.clone();
+                tokio::task::spawn_blocking(move || std::fs::File::open(path)?.sync_all())
+                    .await
+                    .map_err(|e| VolumeError::Unusable(e.to_string()))?
+                    .map_err(|e| VolumeError::Unusable(e.to_string()))?;
+                self.devices.detach(&device).await?;
+                if self.devices.migration_attached(&device)? {
+                    return Err(VolumeError::Unusable(
+                        "waiting for the shared NBD attachment to close".into(),
+                    ));
+                }
+            }
+        }
+        self.flush(app).await
+    }
+
+    pub(super) async fn flush_customer(
+        &self,
+        volume: &VolumeId,
+        app: &protocol::AppId,
+    ) -> Result<(), VolumeError> {
+        if let Some(device) = self.device_for(app).await {
+            self.devices
+                .flush_customer(&NbdTarget {
+                    device_path: &device,
+                    socket_path: &self.filesystem.nbd_socket_path.to_string_lossy(),
+                    volume_id: volume,
+                    image_path: None,
+                })
+                .await?;
+        }
+        self.flush(app).await
+    }
+
+    fn dedicated(&self) -> bool {
+        self.filesystem
+            .nbd_socket_path
+            .starts_with(crate::install::customer_writer::SOCKET_ROOT)
+    }
+
+    fn image_size(&self, volume_id: &VolumeId) -> Result<Option<u64>, VolumeError> {
+        if self.dedicated() {
+            return super::customer::images::image_size(&self.filesystem.mount_path, volume_id);
+        }
+        Ok(device_file_size(&self.filesystem.device_file_for(volume_id)))
+    }
+
     fn ensure_device_file(&self, volume_id: &VolumeId, size_bytes: u64) -> Result<u64, VolumeError> {
+        if self.dedicated() {
+            return super::customer::images::ensure(&self.filesystem.mount_path, volume_id, size_bytes);
+        }
         let path = self.filesystem.device_file_for(volume_id);
         let target = align_to_sector(size_bytes);
         if let Some(current) = device_file_size(&path) {
@@ -134,6 +229,48 @@ impl ZerofsVolumes {
         file.set_len(target)
             .map_err(|error| VolumeError::Unusable(error.to_string()))?;
         Ok(target)
+    }
+
+    async fn provision_device(
+        &self,
+        volume: &VolumeId,
+        app: &protocol::AppId,
+    ) -> Result<ProvenDevice, VolumeError> {
+        let slot = self
+            .allocator
+            .lock()
+            .await
+            .allocate(app)
+            .map_err(|error| VolumeError::Unusable(error.message()))?;
+        let socket_path = self.filesystem.nbd_socket_path.display().to_string();
+        let image_path = self.filesystem.device_file_for(volume);
+        self.devices
+            .ready(&NbdTarget {
+                socket_path: &socket_path,
+                device_path: &slot.nbd_device_path,
+                volume_id: volume,
+                image_path: Some(&image_path),
+            })
+            .await
+    }
+
+    pub(super) async fn verify_migrated_disk(
+        &self,
+        volume: &VolumeId,
+        app: &protocol::AppId,
+    ) -> Result<(), VolumeError> {
+        if self.image_size(volume)?.is_none() {
+            return Err(VolumeError::NotHere {
+                volume_id: volume.clone(),
+            });
+        }
+        let device = self.provision_device(volume, app).await?;
+        if !self.is_formatted(&device).await? {
+            return Err(VolumeError::Unusable(
+                "the migrated disk does not contain an ext4 superblock".into(),
+            ));
+        }
+        Ok(())
     }
 
     async fn is_formatted(&self, device: &ProvenDevice) -> Result<bool, VolumeError> {
@@ -235,23 +372,7 @@ pub fn parse_checkpoint_names(output: &str) -> Vec<String> {
 impl VolumeBackend for ZerofsVolumes {
     async fn provision(&self, desired: &DesiredVolume) -> Result<AttachedVolume, VolumeError> {
         let size_bytes = self.ensure_device_file(&desired.volume_id, desired.size_bytes)?;
-        let slot = self
-            .allocator
-            .lock()
-            .await
-            .allocate(&desired.app_id)
-            .map_err(|error| VolumeError::Unusable(error.message()))?;
-        let socket_path = self.filesystem.nbd_socket_path.display().to_string();
-        let image_path = self.filesystem.device_file_for(&desired.volume_id);
-        let device = self
-            .devices
-            .ready(&NbdTarget {
-                socket_path: &socket_path,
-                device_path: &slot.nbd_device_path,
-                volume_id: &desired.volume_id,
-                image_path: Some(&image_path),
-            })
-            .await?;
+        let device = self.provision_device(&desired.volume_id, &desired.app_id).await?;
         if !self.is_formatted(&device).await? {
             let contents = self.contents.stage_for(desired).await?;
             self.format(&device, contents.as_ref()).await?;
@@ -276,7 +397,7 @@ impl VolumeBackend for ZerofsVolumes {
         app_id: &protocol::AppId,
     ) -> Result<AttachedVolume, VolumeError> {
         let image_path = self.filesystem.device_file_for(volume_id);
-        let Some(size_bytes) = device_file_size(&image_path) else {
+        let Some(size_bytes) = self.image_size(volume_id)? else {
             return Err(VolumeError::NotHere {
                 volume_id: volume_id.clone(),
             });
@@ -305,10 +426,25 @@ impl VolumeBackend for ZerofsVolumes {
         })
     }
 
-    async fn detach(&self, _volume_id: &VolumeId, app_id: &protocol::AppId) -> Result<(), VolumeError> {
+    async fn detach(&self, volume_id: &VolumeId, app_id: &protocol::AppId) -> Result<(), VolumeError> {
         let Some(device_path) = self.device_for(app_id).await else {
             return Ok(());
         };
+        if self
+            .filesystem
+            .nbd_socket_path
+            .starts_with(crate::install::customer_writer::SOCKET_ROOT)
+        {
+            return self
+                .devices
+                .stop_customer(&NbdTarget {
+                    socket_path: &self.filesystem.nbd_socket_path.to_string_lossy(),
+                    device_path: &device_path,
+                    volume_id,
+                    image_path: None,
+                })
+                .await;
+        }
         self.devices.detach(&device_path).await
     }
 
@@ -327,7 +463,11 @@ impl VolumeBackend for ZerofsVolumes {
         self.admin(&["flush"]).await.map(|_| ())
     }
 
-    async fn create_checkpoint(&self, checkpoint_id: &protocol::CheckpointId) -> Result<(), VolumeError> {
+    async fn create_checkpoint(
+        &self,
+        checkpoint_id: &protocol::CheckpointId,
+        _volume: &VolumeId,
+    ) -> Result<(), VolumeError> {
         // A checkpoint is named after the export that owns it, so one already under this name is
         // the last attempt at this same export and is what a retry is retrying. Creating over it
         // is refused rather than ignored, which would make the second attempt fail where the
@@ -351,7 +491,14 @@ impl VolumeBackend for ZerofsVolumes {
         _volume_id: &VolumeId,
         checkpoint_id: &protocol::CheckpointId,
     ) -> Result<crate::domain::exports::reader::CheckpointServer, VolumeError> {
-        self.filesystem.readers.start(checkpoint_id).await
+        self.filesystem
+            .readers
+            .as_ref()
+            .ok_or(VolumeError::NoCheckpoints {
+                what: "a customer volume",
+            })?
+            .start(checkpoint_id)
+            .await
     }
 
     async fn observe_checkpoints(&self) -> Vec<protocol::CheckpointId> {
@@ -387,20 +534,25 @@ impl VolumeBackend for ZerofsVolumes {
         &self,
         owners: &std::collections::BTreeMap<VolumeId, protocol::AppId>,
     ) -> Vec<ObservedBacking> {
-        let Ok(entries) = std::fs::read_dir(self.filesystem.nbd_directory()) else {
-            tracing::warn!(
-                directory = %self.filesystem.nbd_directory().display(),
-                "the zerofs nbd directory would not list; this host reports no volumes"
-            );
-            return Vec::new();
+        let ids = if self.dedicated() {
+            owners.keys().cloned().collect()
+        } else {
+            let Ok(entries) = std::fs::read_dir(self.filesystem.nbd_directory()) else {
+                tracing::warn!(
+                    directory = %self.filesystem.nbd_directory().display(),
+                    "the zerofs nbd directory would not list; this host reports no volumes"
+                );
+                return Vec::new();
+            };
+            entries
+                .flatten()
+                .filter_map(|entry| VolumeId::parse(entry.file_name().to_string_lossy().as_ref()).ok())
+                .collect::<Vec<_>>()
         };
         let socket_path = self.filesystem.nbd_socket_path.display().to_string();
         let mut observed = Vec::new();
-        for entry in entries.flatten() {
-            let Ok(volume_id) = VolumeId::parse(entry.file_name().to_string_lossy().as_ref()) else {
-                continue;
-            };
-            let Some(size_bytes) = device_file_size(&entry.path()) else {
+        for volume_id in ids {
+            let Ok(Some(size_bytes)) = self.image_size(&volume_id) else {
                 continue;
             };
             let device_path = match owners.get(&volume_id) {
@@ -414,7 +566,7 @@ impl VolumeBackend for ZerofsVolumes {
                             socket_path: &socket_path,
                             device_path: path,
                             volume_id: &volume_id,
-                            image_path: Some(&entry.path()),
+                            image_path: Some(&self.filesystem.device_file_for(&volume_id)),
                         })
                         .await
                 }
@@ -591,7 +743,10 @@ mod tests {
         volumes.ensure_device_file(&volume_id, 1024).unwrap();
         let _ = volumes.flush(&app_id()).await;
         let _ = volumes
-            .create_checkpoint(&crate::test_support::checkpoint_id())
+            .create_checkpoint(
+                &crate::test_support::checkpoint_id(),
+                &crate::test_support::volume_id(),
+            )
             .await;
         let _ = volumes.observe_checkpoints().await;
         let _ = volumes
@@ -993,7 +1148,10 @@ mod tests {
         );
         for refused in [
             volumes
-                .create_checkpoint(&crate::test_support::checkpoint_id())
+                .create_checkpoint(
+                    &crate::test_support::checkpoint_id(),
+                    &crate::test_support::volume_id(),
+                )
                 .await,
             volumes
                 .delete_checkpoint(&crate::test_support::checkpoint_id())
@@ -1024,7 +1182,10 @@ mod tests {
             staging(root.path()),
         );
         volumes
-            .create_checkpoint(&crate::test_support::checkpoint_id())
+            .create_checkpoint(
+                &crate::test_support::checkpoint_id(),
+                &crate::test_support::volume_id(),
+            )
             .await
             .unwrap();
         volumes

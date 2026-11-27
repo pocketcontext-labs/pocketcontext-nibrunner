@@ -55,6 +55,13 @@ pub fn zerofs_settings(
     settings
 }
 
+pub fn customer_writer_units(
+    config: &crate::config::HostConfig,
+    settings: &crate::config::ZerofsSettings,
+) -> [(&'static str, String); 2] {
+    crate::install::customer_writer::units(config, settings, &config.state_dir.join("config.toml"))
+}
+
 pub fn app_id() -> AppId {
     AppId::parse("app-1").unwrap()
 }
@@ -508,16 +515,19 @@ async fn test_host_over(
     ));
     let host = Arc::new(Host {
         persist_lock: Default::default(),
+        egress: Default::default(),
         cron,
         cron_execution: Arc::new(crate::adapters::cron_execution::VsockCronExecution::new(
             logs.clone(),
             cron_runs.clone(),
         )),
         cron_runs,
+        customer_volumes: None,
         guest_memory_mib: u64::from(DEFAULT_INSTANCE_RESOURCES.memory_mib) * 4,
         guest_image_version: "6.1.180-test".to_string(),
         state: state.clone(),
         allocator: Arc::new(Mutex::new(SlotAllocator::addressing(config.max_apps))),
+        accepting_document: Default::default(),
         cache: Arc::new(Mutex::new(DesiredStateCache::new())),
         vms,
         logs,

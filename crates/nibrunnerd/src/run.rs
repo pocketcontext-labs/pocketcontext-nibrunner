@@ -64,14 +64,13 @@ pub async fn build_host(
     let commands: Arc<dyn crate::ports::CommandRunner> = Arc::new(HostCommands);
     let state = HostState::shared();
     let cache = Arc::new(Mutex::new(DesiredStateCache::new()));
-    let repositories = crate::repositories::Repositories::sqlite(
-        crate::domain::store::open(&config.state_db_file())
-            .await
-            .map_err(|error| StartupError::Unusable(error.message()))?,
-    );
-    if let Err(error) = crate::domain::store::import::import_documents(&repositories, &config).await {
-        tracing::warn!(error = %error.message(), "what an earlier daemon wrote could not be carried over");
-    }
+    let pool = crate::domain::store::open(&config.state_db_file())
+        .await
+        .map_err(|error| StartupError::Unusable(error.message()))?;
+    crate::domain::store::import::import_documents(&pool, &config)
+        .await
+        .map_err(|error| StartupError::Unusable(format!("could not restore host state: {error}")))?;
+    let repositories = crate::repositories::Repositories::sqlite(pool);
     let allocator = Arc::new(Mutex::new(SlotAllocator::addressing(config.max_apps)));
 
     let artifacts = Arc::new(
@@ -81,20 +80,54 @@ pub async fn build_host(
     let storage_prefix = ObjectKey::parse(&config.storage_prefix)
         .map_err(|_| StartupError::Config("volumes.storage_prefix is not a key".into()))?;
     let contents = ContentsStaging::new(artifacts.clone(), config.initial_contents_dir());
-    let volumes: Arc<dyn crate::adapters::volumes::VolumeBackend> = match config.volumes.zerofs() {
-        None => Arc::new(LocalFileVolumes::new(
-            config.volumes_dir(),
-            storage_prefix,
-            commands.clone(),
-            contents,
-        )),
-        Some(settings) => Arc::new(ZerofsVolumes::new(
-            ZerofsFilesystem::new(storage_prefix, settings),
-            allocator.clone(),
-            commands.clone(),
-            contents,
-        )),
-    };
+    let shared_cache_mib;
+    let customer_volumes;
+    let volumes: Arc<dyn crate::adapters::volumes::VolumeBackend> =
+        if let Some(settings) = config.volumes.zerofs() {
+            use crate::adapters::volumes::VolumeBackend;
+            let shared = ZerofsVolumes::new(
+                ZerofsFilesystem::new(storage_prefix, settings),
+                allocator.clone(),
+                commands.clone(),
+                contents,
+            );
+            shared_cache_mib = shared.reserved_cache().memory_mib();
+            let placements = crate::adapters::volumes::customer::CustomerPlacements::open(&config)
+                .map_err(|e| StartupError::Config(e.message()))?;
+            let owner = crate::install::service_user::ids(crate::install::service_user::ZEROFS_USER)
+                .ok_or_else(|| StartupError::Config("the ZeroFS service account is missing".into()))?;
+            let volumes = Arc::new(crate::adapters::volumes::customer::CustomerVolumes::new(
+                placements,
+                shared,
+                crate::install::customer_writer::caches(&config),
+                owner,
+                commands.clone(),
+            ));
+            customer_volumes = Some(volumes.clone());
+            volumes
+        } else {
+            let profiles = crate::install::customer_writer::profiles(&config);
+            if profiles
+                .try_exists()
+                .map_err(|e| StartupError::Config(e.to_string()))?
+                && std::fs::read_dir(profiles)
+                    .map_err(|e| StartupError::Config(e.to_string()))?
+                    .next()
+                    .is_some()
+            {
+                return Err(StartupError::Config(
+                    "this host has customer ZeroFS placements and cannot switch to local-file storage".into(),
+                ));
+            }
+            shared_cache_mib = 0;
+            customer_volumes = None;
+            Arc::new(LocalFileVolumes::new(
+                config.volumes_dir(),
+                storage_prefix,
+                commands.clone(),
+                contents,
+            ))
+        };
     let metrics = Arc::new(crate::domain::metrics::HostMetrics::new());
     metrics
         .smt_active
@@ -232,13 +265,15 @@ pub async fn build_host(
 
     let host = Arc::new(Host {
         persist_lock: Default::default(),
+        egress: Default::default(),
         cron,
         cron_execution: Arc::new(crate::adapters::cron_worker::process::DetachedCronExecution::new(
             &config,
             executable.clone(),
         )),
         cron_runs: Arc::new(crate::domain::cron::runs::CronRuns::default()),
-        guest_memory_mib: guest_memory_mib(read_host_memory_mib(), volumes.reserved_cache().memory_mib()),
+        customer_volumes,
+        guest_memory_mib: guest_memory_mib(read_host_memory_mib(), shared_cache_mib),
         guest_image_version,
         state,
         allocator: allocator.clone(),
@@ -246,6 +281,7 @@ pub async fn build_host(
         exports,
         nbd: crate::adapters::volumes::nbd::NbdDevices::new(commands.clone()),
         commands: commands.clone(),
+        accepting_document: Default::default(),
         cache,
         vms,
         logs: files,

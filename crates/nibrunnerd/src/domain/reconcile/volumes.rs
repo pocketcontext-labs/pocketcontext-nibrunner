@@ -121,7 +121,30 @@ pub async fn apply_volumes(
     let existing: Vec<ReportedVolume> = observed
         .volumes
         .iter()
-        .map(|volume| to_reported_volume(volume, last_refusals.get(&volume.volume_id)))
+        .map(|volume| {
+            let mut report = to_reported_volume(volume, last_refusals.get(&volume.volume_id));
+            if host
+                .customer_volumes
+                .as_ref()
+                .is_some_and(|v| v.migrating(&report.app_id))
+            {
+                report.state = VolumeState::Pending;
+                report.device_path = None;
+                report.message = Some(StateMessage::new(
+                    "migrating the shared volume to its customer bucket",
+                ));
+            }
+            if let Some(reason) = host
+                .customer_volumes
+                .as_ref()
+                .and_then(|v| v.source_failure(&report.app_id))
+            {
+                if report.state == VolumeState::Ready {
+                    report.message = Some(reason);
+                }
+            }
+            report
+        })
         .collect();
     host.state
         .modify(|snapshot| {
@@ -166,16 +189,13 @@ pub async fn apply_volumes(
 /// only an app that is leaving gives them up. Taking it here is also what stops the slot the
 /// cursor hands out next from inheriting a live device.
 async fn give_back_slot(host: &Host, app_id: &AppId) {
-    let tap_name = {
-        let mut allocator = host.allocator.lock().await;
-        let held = allocator.lookup(app_id).map(|slot| slot.tap_name);
-        allocator.release(app_id);
-        held
-    };
-    if let Some(tap_name) = tap_name {
-        if let Err(error) = host.vms.delete_tap(&tap_name).await {
-            tracing::warn!(%tap_name, error = %error.message(), "a tap outlived the app it was made for");
+    let mut allocator = host.allocator.lock().await;
+    if let Some(slot) = allocator.lookup(app_id) {
+        if let Err(error) = host.vms.delete_tap(&slot.tap_name).await {
+            tracing::warn!(tap_name = %slot.tap_name, error = %error.message(), "a tap outlived the app it was made for");
         }
+        allocator.release(app_id);
+        host.bind_egress(&allocator).await;
     }
 }
 
@@ -240,6 +260,17 @@ pub async fn apply_teardowns(host: &Host, plan: &ReconcilePlan) {
 }
 
 async fn tear_down_volume(host: &Host, desired: &protocol::DesiredVolume) {
+    // A retired private writer can be gone before its deletion receipt reaches SQLite.
+    if desired.storage.is_some()
+        && host
+            .state
+            .snapshot()
+            .await
+            .deleted_volumes
+            .contains_key(&desired.volume_id)
+    {
+        return;
+    }
     let tearing_down = std::time::Instant::now();
     let torn_down = host.volumes.teardown(&desired.volume_id, &desired.app_id).await;
     host.metrics.resources.done(

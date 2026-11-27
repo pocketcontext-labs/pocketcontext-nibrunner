@@ -169,7 +169,7 @@ async fn apply_starts(host: &Host, plan: &ReconcilePlan) {
     for desired in starts {
         let wanted = &desired.config.resources;
         if let Some(shortfall_mib) =
-            memory_shortfall_for(host.guest_memory_mib, &records, &desired.app_id, wanted)
+            memory_shortfall_for(host.guest_memory_budget_mib(), &records, &desired.app_id, wanted)
         {
             instances::wait_for_room(host, desired, shortfall_mib).await;
             waiting += 1;
@@ -184,7 +184,7 @@ async fn apply_starts(host: &Host, plan: &ReconcilePlan) {
         tracing::warn!(
             waiting,
             memory_mib = waiting_mib,
-            guest_memory_mib = host.guest_memory_mib,
+            guest_memory_mib = host.guest_memory_budget_mib(),
             "instance starts wait for room on this host"
         );
         host.metrics
@@ -198,6 +198,11 @@ async fn apply_starts(host: &Host, plan: &ReconcilePlan) {
 /// timer runs one whether or not anything moved: that is how a volume whose device died under a
 /// standing document gets noticed.
 pub async fn reconcile(host: &Arc<Host>, desired: &HostDesiredState, trigger: Trigger) {
+    let effective = host
+        .customer_volumes
+        .as_ref()
+        .map(|customer| customer.during_migrations(desired));
+    let desired = effective.as_deref().unwrap_or(desired);
     let deployments = desired
         .instances
         .iter()
@@ -215,7 +220,29 @@ pub async fn reconcile(host: &Arc<Host>, desired: &HostDesiredState, trigger: Tr
         .collect::<Vec<_>>();
     host.cron_runs.synchronize(&enabled).await;
     let observed = observe(host, desired).await;
-    let plan = plan_reconcile(desired, &observed);
+    let mut plan = plan_reconcile(desired, &observed);
+    if let Some(customer) = &host.customer_volumes {
+        plan.instances.retain(|action| {
+            let app = match action {
+                InstancePlan::Stop { app_id, .. }
+                | InstancePlan::Forget { app_id }
+                | InstancePlan::None { app_id } => app_id,
+                InstancePlan::Start { desired }
+                | InstancePlan::Hold { desired }
+                | InstancePlan::Recover { desired }
+                | InstancePlan::Replace { desired }
+                | InstancePlan::Sleep { desired } => &desired.app_id,
+            };
+            !customer.migrating(app)
+        });
+        plan.volumes.retain(|action| match action {
+            VolumePlan::Provision { desired }
+            | VolumePlan::Teardown { desired }
+            | VolumePlan::Blocked { desired, .. } => !customer.migrating(&desired.app_id),
+            VolumePlan::Detach { app_id, .. } => !customer.migrating(app_id),
+            VolumePlan::None { .. } => true,
+        });
+    }
     host.state
         .modify(|snapshot| snapshot.deferred_work = plan.has_deferred_work())
         .await;
@@ -243,6 +270,18 @@ pub async fn reconcile(host: &Arc<Host>, desired: &HostDesiredState, trigger: Tr
 
     host.cron_runs.synchronize(&enabled).await;
     host.state.modify(|snapshot| snapshot.converged = true).await;
+    if let Some(customer) = &host.customer_volumes {
+        host.state
+            .modify(|state| {
+                for volume in &mut state.volume_reports {
+                    if volume.message.is_none() {
+                        volume.message = customer.cleanup_message(&volume.app_id);
+                    }
+                }
+            })
+            .await;
+        customer.resume_migrations(host, desired).await;
+    }
     host.state.signal_refresh();
     host.state.signal_report();
 }
@@ -1312,7 +1351,7 @@ mod tests {
     /// How many apps of the default size the test host has memory for: four.
     fn apps_that_fit(host: &TestHost) -> usize {
         crate::domain::report::capacity::apps_up_at_once(
-            host.guest_memory_mib,
+            host.guest_memory_budget_mib(),
             protocol::DEFAULT_INSTANCE_RESOURCES.memory_mib,
         ) as usize
     }

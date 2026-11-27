@@ -30,10 +30,12 @@ pub struct Host {
     pub state: SharedState,
     pub allocator: Arc<Mutex<SlotAllocator>>,
     pub cache: Arc<Mutex<DesiredStateCache>>,
+    pub(crate) accepting_document: Mutex<()>,
     pub vms: Arc<dyn Vmm>,
     /// What every tenant's output is written to, held here as well as behind the receiver so that
     /// a pass can let an app's output go once the app itself is no longer on this host.
     pub logs: Arc<FileLogSink>,
+    pub(crate) customer_volumes: Option<Arc<crate::adapters::volumes::customer::CustomerVolumes>>,
     pub volumes: Arc<dyn VolumeBackend>,
     pub artifacts: Arc<dyn ArtifactStore>,
     pub payloads: Arc<dyn PayloadBuilder>,
@@ -42,6 +44,7 @@ pub struct Host {
     pub nbd: NbdDevices,
     pub commands: Arc<dyn CommandRunner>,
     pub firewall: Arc<HostFirewall>,
+    pub(crate) egress: Mutex<crate::adapters::net::egress::EgressMonitor>,
     pub router: Arc<Router>,
     pub http_proxy: Option<Arc<crate::adapters::proxy::worker::process::DetachedHttpProxy>>,
     pub metrics: Arc<HostMetrics>,
@@ -57,6 +60,14 @@ pub struct Host {
 }
 
 impl Host {
+    pub fn guest_memory_budget_mib(&self) -> u64 {
+        self.guest_memory_mib.saturating_sub(
+            self.customer_volumes
+                .as_ref()
+                .map_or(0, |customer| customer.reservation().memory_mib()),
+        )
+    }
+
     pub async fn refresh_http_metrics(&self) -> std::io::Result<()> {
         if let Some(proxy) = &self.http_proxy {
             self.metrics.proxy.worker_samples(proxy.metrics().await?);
@@ -91,7 +102,34 @@ impl Host {
         &self,
         app_id: &AppId,
     ) -> Result<nft_render::AppSlot, crate::adapters::net::allocator::SlotExhausted> {
-        self.allocator.lock().await.allocate(app_id)
+        let mut allocator = self.allocator.lock().await;
+        let slot = allocator.allocate(app_id)?;
+        if self.outbound_monitoring() {
+            let mut monitor = self.egress.lock().await;
+            if !monitor.bound_to(&slot) {
+                monitor
+                    .bind(self.commands.as_ref(), allocator.assignments(), allocator.limit())
+                    .await;
+            }
+        }
+        Ok(slot)
+    }
+
+    pub(crate) fn outbound_monitoring(&self) -> bool {
+        self.config
+            .metrics
+            .as_ref()
+            .is_some_and(|metrics| metrics.outbound_monitoring)
+    }
+
+    pub(crate) async fn bind_egress(&self, allocator: &SlotAllocator) {
+        if self.outbound_monitoring() {
+            self.egress
+                .lock()
+                .await
+                .bind(self.commands.as_ref(), allocator.assignments(), allocator.limit())
+                .await;
+        }
     }
 
     pub async fn slot_of(&self, app_id: &AppId) -> Option<nft_render::AppSlot> {
@@ -141,19 +179,14 @@ impl Host {
             .await
     }
 
-    pub async fn load(&self) {
-        let records = self.repositories.instances.all().await.unwrap_or_default();
-        let last_active = self.repositories.activity.all().await.unwrap_or_default();
-        let meters = self.repositories.meters.all().await.unwrap_or_default();
-        let deleted = self.repositories.deleted_volumes.all().await.unwrap_or_default();
-        let assignments = self.repositories.slots.all().await.unwrap_or_default();
-        let cursor = self.repositories.slots.cursor().await.unwrap_or_default();
-        let accepted = self
-            .repositories
-            .accepted_document
-            .read()
-            .await
-            .unwrap_or_default();
+    pub async fn load(&self) -> Result<(), crate::domain::store::StoreError> {
+        let records = self.repositories.instances.all().await?;
+        let last_active = self.repositories.activity.all().await?;
+        let meters = self.repositories.meters.all().await?;
+        let deleted = self.repositories.deleted_volumes.all().await?;
+        let assignments = self.repositories.slots.all().await?;
+        let cursor = self.repositories.slots.cursor().await?;
+        let accepted = self.repositories.accepted_document.read().await?;
         if let Some(document) = &accepted {
             self.remember_host_id(document.desired.host_id.as_str()).await;
         }
@@ -186,6 +219,7 @@ impl Host {
             slots = self.slots().await.len(),
             "host state loaded"
         );
+        Ok(())
     }
 
     pub async fn accepted_document(&self) -> Option<AcceptedDocument> {
@@ -204,15 +238,18 @@ impl Host {
         &self,
         document: &AcceptedDocument,
     ) -> Result<(), crate::domain::store::StoreError> {
-        self.remember_host_id(document.desired.host_id.as_str()).await;
-        if self
+        let _accepting = self.accepting_document.lock().await;
+        let already_accepted = self
             .state
             .modify(|snapshot| snapshot.accepted_digest.as_ref() == Some(&document.digest))
-            .await
-        {
+            .await;
+        if !already_accepted {
+            self.repositories.accepted_document.remember(document).await?;
+        }
+        self.remember_host_id(document.desired.host_id.as_str()).await;
+        if already_accepted {
             return Ok(());
         }
-        self.repositories.accepted_document.remember(document).await?;
         self.state
             .modify(|snapshot| {
                 snapshot.accepted_digest = Some(document.digest.clone());
@@ -444,7 +481,7 @@ mod tests {
             .returning(|| Ok(BTreeMap::from([(volume_id(), reported_volume(|_| {}))])));
 
         let host = test_host_with(bundle(instances, slots, activity, deleted, identity)).await;
-        host.load().await;
+        host.load().await.unwrap();
 
         assert!(host.state.record(&app_id()).await.is_some());
         assert_eq!(host.slot_of(&app_id()).await.map(|slot| slot.slot), Some(4));
@@ -465,7 +502,7 @@ mod tests {
         }));
         repositories.accepted_document.remember(&document).await.unwrap();
         let host = test_host_with(repositories).await;
-        host.load().await;
+        host.load().await.unwrap();
         let records = host.state.records().await;
         assert_eq!(records[0].access, access);
         let routes = crate::domain::report::routes::renderable_routes(&records);
@@ -473,18 +510,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_host_whose_notes_will_not_be_read_comes_up_knowing_nothing_rather_than_not_at_all() {
+    async fn unreadable_slots_stop_startup_before_a_running_guest_or_its_tap_is_touched() {
         let (mut instances, mut slots, mut activity, mut deleted, identity) = mocked();
-        let unreadable = || StoreError::Unreadable("the file is not a database".into());
-        instances.expect_all().returning(move || Err(unreadable()));
-        slots.expect_all().returning(move || Err(unreadable()));
-        slots.expect_cursor().returning(move || Err(unreadable()));
-        activity.expect_all().returning(move || Err(unreadable()));
-        deleted.expect_all().returning(move || Err(unreadable()));
-
+        instances
+            .expect_all()
+            .returning(|| Ok(vec![instance_record(|_| {})]));
+        activity.expect_all().returning(|| Ok(BTreeMap::new()));
+        deleted.expect_all().returning(|| Ok(BTreeMap::new()));
+        slots
+            .expect_all()
+            .returning(|| Err(StoreError::Unreadable("slot table unreadable".into())));
         let host = test_host_with(bundle(instances, slots, activity, deleted, identity)).await;
-        host.load().await;
-        assert!(host.state.records().await.is_empty());
+        let slot = host.slot_for(&app_id()).await.unwrap();
+        host.state.put_record(instance_record(|_| {})).await;
+        let lifecycle = crate::controllers::lifecycle_controller::LifecycleController::new(
+            host.arc().clone(),
+            crate::run::host_versions(&host),
+        );
+
+        let error = lifecycle.start().await.unwrap_err();
+        assert!(error.to_string().contains("slot table unreadable"));
+        assert_eq!(host.slot_of(&app_id()).await, Some(slot));
+        assert!(host.state.record(&app_id()).await.is_some());
+        assert!(host.vms.calls().is_empty());
+        assert!(host.commands.calls().is_empty());
     }
 
     #[tokio::test]

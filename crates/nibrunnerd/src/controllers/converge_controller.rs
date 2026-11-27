@@ -98,14 +98,30 @@ impl ConvergeController {
     }
 
     async fn supports_volume_storage(&self, desired: &HostDesiredState) -> bool {
-        let Some(volume) = desired.volumes.iter().find(|volume| volume.storage.is_some()) else {
+        let error = if let Some(volumes) = &self.host.customer_volumes {
+            let state = self.host.state.snapshot().await;
+            let previous = self.host.accepted_document().await;
+            volumes
+                .prepare(
+                    desired,
+                    self.host.guest_memory_budget_mib(),
+                    &state.records,
+                    previous.as_ref().map(|d| &d.desired),
+                )
+                .err()
+                .map(|error| error.message())
+        } else {
+            desired.volumes.iter().find(|v| v.storage.is_some()).map(|v| {
+                format!(
+                    "volume {} requires a dedicated ZeroFS writer unavailable on this host",
+                    v.volume_id
+                )
+            })
+        };
+        let Some(reason) = error else {
             return true;
         };
-        let reason = format!(
-            "volume {} requires a dedicated ZeroFS writer unavailable on this host",
-            volume.volume_id
-        );
-        tracing::warn!(volume_id = %volume.volume_id, "desired volume requires a dedicated ZeroFS writer");
+        tracing::warn!(%reason, "desired volume storage was refused");
         self.note_refusal(reason).await;
         false
     }
@@ -200,6 +216,44 @@ mod tests {
 
     fn controller(host: &TestHost, reconciler: MockReconcileService) -> Arc<ConvergeController> {
         ConvergeController::new(host.arc().clone(), Arc::new(reconciler))
+    }
+
+    #[tokio::test]
+    async fn a_failed_revision_write_is_retried_and_only_the_committed_revision_survives_restart() {
+        let pool = crate::domain::store::in_memory().await;
+        let host = test_host_with(crate::repositories::Repositories::sqlite(pool.clone())).await;
+        let mut reconciler = MockReconcileService::new();
+        reconciler.expect_reconcile().times(2).returning(|_, _| ());
+        let controller = controller(&host, reconciler);
+        let previous = desired_state(|_| {});
+        write_desired_state(&host.config.desired_state_file, &previous);
+        assert!(controller.converge_once().await);
+        sqlx::query("create trigger refuse_revision before update on accepted_document begin select raise(fail, 'write refused'); end")
+            .execute(&pool).await.unwrap();
+        let next = desired_state(|state| {
+            state.revision = protocol::Revision::parse("next").unwrap();
+            state.instances.push(desired_instance(|_| {}));
+        });
+        write_desired_state(&host.config.desired_state_file, &next);
+        assert!(!controller.converge_once().await);
+        assert_eq!(
+            host.state.snapshot().await.accepted_revision,
+            Some(previous.revision.clone())
+        );
+        assert_eq!(host.cache.lock().await.latest(), Some(&previous));
+        assert_eq!(host.accepted_document().await.unwrap().desired, previous);
+        sqlx::query("drop trigger refuse_revision")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(controller.converge_once().await);
+        let restarted = test_host_with(crate::repositories::Repositories::sqlite(pool)).await;
+        restarted.load().await.unwrap();
+        assert_eq!(
+            restarted.state.snapshot().await.accepted_revision,
+            Some(next.revision.clone())
+        );
+        assert_eq!(restarted.accepted_document().await.unwrap().desired, next);
     }
 
     #[tokio::test]

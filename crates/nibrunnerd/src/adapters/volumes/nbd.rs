@@ -1,3 +1,5 @@
+mod customer;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -123,7 +125,11 @@ impl NbdDevices {
     /// export is served from. A volume no one has formatted yet has no filesystem to be told by
     /// and is never proven here — only an attach by name can say what such a device serves.
     pub async fn proven(&self, target: &NbdTarget<'_>) -> Option<ProvenDevice> {
-        if !self.is_usable(target.device_path).await {
+        if target.dedicated() {
+            return (self.customer_owned(target).ok()? && self.is_usable(target.device_path).await)
+                .then(|| Self::proof(target));
+        }
+        if self.is_customer_client(target.device_path) || !self.is_usable(target.device_path).await {
             return None;
         }
         if self.is_known_to_carry(target) {
@@ -135,6 +141,14 @@ impl NbdDevices {
     /// A device that cannot prove which volume it carries is taken down and attached to it by
     /// name, which is the one other way to know what it serves.
     pub async fn ready(&self, target: &NbdTarget<'_>) -> Result<ProvenDevice, VolumeError> {
+        if target.dedicated() {
+            return self.ready_customer(target).await;
+        }
+        if self.is_customer_client(target.device_path) {
+            return Err(VolumeError::Unusable(
+                "the device belongs to a customer writer".into(),
+            ));
+        }
         if let Some(device) = self.proven(target).await {
             return Ok(device);
         }
@@ -158,6 +172,19 @@ impl NbdDevices {
     /// whether the device answers. Only [`Self::is_usable`] does.
     pub fn is_attached(&self, device_path: &str) -> bool {
         self.attribute(device_path, "pid").is_some()
+    }
+
+    pub(super) fn migration_attached(&self, device: &str) -> Result<bool, VolumeError> {
+        let name = Path::new(device)
+            .file_name()
+            .ok_or_else(|| VolumeError::Unusable("invalid shared NBD device".into()))?;
+        let block = self.sysfs_block.join(name);
+        std::fs::metadata(block.join("size"))
+            .map_err(|_| VolumeError::Unusable("shared NBD device is unavailable".into()))?;
+        block
+            .join("pid")
+            .try_exists()
+            .map_err(|_| VolumeError::Unusable("cannot confirm shared NBD attachment".into()))
     }
 
     pub fn attached_size_bytes(&self, device_path: &str) -> u64 {
@@ -207,6 +234,11 @@ impl NbdDevices {
     }
 
     pub async fn detach(&self, device_path: &str) -> Result<(), VolumeError> {
+        if self.is_customer_client(device_path) {
+            return Err(VolumeError::Unusable(
+                "the device belongs to a customer writer".into(),
+            ));
+        }
         self.forget(device_path);
         self.client(
             &format!("{NBD_CLIENT} -d {device_path}"),

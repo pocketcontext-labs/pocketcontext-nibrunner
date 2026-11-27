@@ -52,6 +52,8 @@ pub struct InstanceRecord {
     pub on_request: bool,
     #[serde(default)]
     pub start_attempts: AttemptWindow,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_start_failure: Option<StateMessage>,
     /// Restarts of the tenant by the supervisor inside its guest, since the host last booted the
     /// app afresh: a cold boot starts the count over, a restore keeps it. The host's own boots
     /// are `start_attempts`.
@@ -122,6 +124,7 @@ impl InstanceRecord {
             desired_running: fields.desired_running,
             on_request: fields.on_request,
             start_attempts: NO_START_ATTEMPTS,
+            last_start_failure: None,
             restart_count: 0,
             last_hook: None,
             last_restart: None,
@@ -137,6 +140,7 @@ impl InstanceRecord {
         if self.deployment_id != fields.deployment_id {
             self.awake_meter = Default::default();
             self.last_hook = None;
+            self.last_start_failure = None;
         }
         self.deployment_id = fields.deployment_id;
         self.volume_id = fields.volume_id;

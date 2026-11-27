@@ -101,8 +101,11 @@ impl AppWaker {
             .into_iter()
             .filter(|record| &record.app_id != app_id)
             .collect();
-        let shortfall =
-            memory_shortfall_mib(self.host.guest_memory_mib, &committed_resources(&others), wanted);
+        let shortfall = memory_shortfall_mib(
+            self.host.guest_memory_budget_mib(),
+            &committed_resources(&others),
+            wanted,
+        );
         (shortfall > 0).then_some(WakeRefusal::NoRoom {
             shortfall_mib: shortfall,
         })
@@ -111,6 +114,17 @@ impl AppWaker {
     async fn boot(&self, app_id: &AppId) -> Outcome {
         let started = Instant::now();
         let transition = self.host.state.transition(app_id).await;
+        if self
+            .host
+            .customer_volumes
+            .as_ref()
+            .is_some_and(|v| v.migrating(app_id))
+        {
+            return Err(WakeRefusal::Failed {
+                kind: WakeFailure::VolumeUnusable,
+                reason: "volume migration in progress".into(),
+            });
+        }
         let wanted = {
             let cache = self.host.cache.lock().await;
             cache
