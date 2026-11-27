@@ -1,5 +1,43 @@
 # Changelog
 
+## [2026.11.20] - 2026-11-27
+
+### Features
+
+- **volumes:** Retry rejected migrations with corrected writer settings (#396)
+- **volumes:** Probe the destination writer before stopping the source (#393)
+- **volumes:** Retire shared checkpoints after customer bucket cutover (#389)
+- **volumes:** Migrate a shared disk to its requested customer writer (#388)
+- **volumes:** Copy and verify detached images between ZeroFS writers (#387)
+- **report:** Retain a sanitized boot failure across retry exhaustion (#382)
+- **metrics:** Report outbound connections per app (#385)
+- **volumes:** Run and recover customer disks on dedicated ZeroFS writers (#373)
+- **volumes:** Stage durable customer writer configurations by app (#372)
+- **volumes:** Bind customer NBD attachments to their writer and export (#371)
+- **install:** Install isolated per-app ZeroFS service templates (#376)
+
+### Fixes
+
+- Record the test tenant's sha2 dependency in Cargo.lock
+- **volumes:** Release failed placements on withdrawal or deletion (#400)
+- **volumes:** Serve the committed disk while shared cleanup retries (#399)
+- **volumes:** Recover the shared source on pre-commit cutover failure (#395)
+- **volumes:** Serve the shared disk during migration preflight (#394)
+- **proxy:** Bind cold HTTP listeners in the serving worker (#381)
+- **reconcile:** Commit desired state before acknowledging its revision (#380)
+- **host:** Refuse startup when persisted ownership is unreadable (#379)
+
+### Documentation
+
+- **volumes:** Document customer bucket ownership and independent recovery (#377)
+
+### Maintenance
+
+- Merge ilbertt/nibrunner main through v2026.11.17 (c4e981e)
+- **guest:** Verify shared data survives invalid bucket credentials (#397)
+- **guest:** Exercise sleeping volume migration during a writer outage (#391)
+- **volumes:** Recover a guest disk independently from its S3 bucket (#374)
+
 ## [2026.11.19] - 2026-11-26
 
 ### Features
