@@ -95,6 +95,11 @@ jobs:
       - name: Run the integration tests
         run: just integration
 
+      - name: Verify offline ext4 resize and refusal
+        env:
+          NIBRUNNER_INTEGRATION: "1"
+        run: cargo test -p nibrunnerd --lib adapters::volumes::local_file::resize
+
       - name: Unpack remote OCI images
         timeout-minutes: 15
         env:

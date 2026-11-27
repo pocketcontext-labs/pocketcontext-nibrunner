@@ -309,6 +309,7 @@ mod tests {
 
     fn reported(state: VolumeState) -> ReportedVolume {
         ReportedVolume {
+            local_resize: None,
             usage: None,
             volume_id: volume_id(),
             app_id: app_id(),

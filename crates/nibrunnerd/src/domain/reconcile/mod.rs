@@ -3,6 +3,7 @@ pub mod exports;
 pub mod idle;
 pub mod ingress;
 pub mod instances;
+pub mod local_resize;
 pub mod network;
 pub mod plan;
 pub mod volumes;
@@ -203,6 +204,7 @@ pub async fn reconcile(host: &Arc<Host>, desired: &HostDesiredState, trigger: Tr
         .as_ref()
         .map(|customer| customer.during_migrations(desired));
     let desired = effective.as_deref().unwrap_or(desired);
+    let resizing = local_resize::requested(desired);
     let deployments = desired
         .instances
         .iter()
@@ -215,13 +217,23 @@ pub async fn reconcile(host: &Arc<Host>, desired: &HostDesiredState, trigger: Tr
     let enabled = desired
         .instances
         .iter()
-        .filter(|instance| instance.desired_state != DesiredInstanceState::Stopped)
+        .filter(|instance| {
+            instance.desired_state != DesiredInstanceState::Stopped && !resizing.contains(&instance.app_id)
+        })
         .map(|instance| (instance.app_id.clone(), instance.deployment_id.clone()))
         .collect::<Vec<_>>();
     host.cron_runs.synchronize(&enabled).await;
+    let resize_reports = local_resize::run(host, desired).await;
     let observed = observe(host, desired).await;
     let mut plan = plan_reconcile(desired, &observed);
-    if let Some(customer) = &host.customer_volumes {
+    if !resizing.is_empty() || host.customer_volumes.is_some() {
+        let fenced = |app: &protocol::AppId| {
+            resizing.contains(app)
+                || host
+                    .customer_volumes
+                    .as_ref()
+                    .is_some_and(|customer| customer.migrating(app))
+        };
         plan.instances.retain(|action| {
             let app = match action {
                 InstancePlan::Stop { app_id, .. }
@@ -233,13 +245,13 @@ pub async fn reconcile(host: &Arc<Host>, desired: &HostDesiredState, trigger: Tr
                 | InstancePlan::Replace { desired }
                 | InstancePlan::Sleep { desired } => &desired.app_id,
             };
-            !customer.migrating(app)
+            !fenced(app)
         });
         plan.volumes.retain(|action| match action {
             VolumePlan::Provision { desired }
             | VolumePlan::Teardown { desired }
-            | VolumePlan::Blocked { desired, .. } => !customer.migrating(&desired.app_id),
-            VolumePlan::Detach { app_id, .. } => !customer.migrating(app_id),
+            | VolumePlan::Blocked { desired, .. } => !fenced(&desired.app_id),
+            VolumePlan::Detach { app_id, .. } => !fenced(app_id),
             VolumePlan::None { .. } => true,
         });
     }
@@ -254,6 +266,15 @@ pub async fn reconcile(host: &Arc<Host>, desired: &HostDesiredState, trigger: Tr
     tokio::join!(prefetch, stops);
 
     volumes::apply_volumes(host, &plan, &observed, desired, trigger).await;
+    if !resize_reports.is_empty() {
+        host.state
+            .modify(|state| {
+                for volume in &mut state.volume_reports {
+                    volume.local_resize = resize_reports.get(&volume.volume_id).cloned();
+                }
+            })
+            .await;
+    }
     apply_sleeps(host, &plan).await;
     apply_holds(host, &plan).await;
     network::apply_activators(host).await;

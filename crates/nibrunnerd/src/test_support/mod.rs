@@ -178,6 +178,7 @@ pub fn desired_instance(edit: impl FnOnce(&mut DesiredInstance)) -> DesiredInsta
 
 pub fn desired_volume(edit: impl FnOnce(&mut DesiredVolume)) -> DesiredVolume {
     let mut value = DesiredVolume {
+        local_resize: None,
         volume_id: volume_id(),
         app_id: app_id(),
         size_bytes: VOLUME_SIZE_BYTES,
@@ -273,6 +274,7 @@ pub fn reported_restart(edit: impl FnOnce(&mut ReportedRestart)) -> ReportedRest
 
 pub fn reported_volume(edit: impl FnOnce(&mut ReportedVolume)) -> ReportedVolume {
     let mut value = ReportedVolume {
+        local_resize: None,
         usage: None,
         volume_id: volume_id(),
         app_id: app_id(),

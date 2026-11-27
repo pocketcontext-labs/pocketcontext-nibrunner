@@ -42,7 +42,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y musl-tools e2fsprogs
+        sudo apt-get install -y musl-tools e2fsprogs bubblewrap
 
     - name: Install Rust toolchain
       shell: bash

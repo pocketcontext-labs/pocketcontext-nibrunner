@@ -64,6 +64,21 @@ default.
 The limitation: volumes do not survive the machine. Checkpoints and exports are not supported on
 this backend, because they are taken in the object store.
 
+#### Resizing an existing ext4 volume
+
+A host that reports `versions.localVolumeResize: true` can grow or shrink a local ext4 volume offline. Keep the instance and its deployment in the desired document. Set the volume's `sizeBytes` to the new capacity and add the request below. Use the current volume size from the host report for `fromBytes` and a fresh 32-character lowercase hexadecimal request ID.
+
+```json
+"localResize": {
+  "requestId": "59ca7f9f94bb4490a6eb3279fe692f0f",
+  "fromBytes": 8589934592
+}
+```
+
+The guest goes offline during maintenance. A sleeping guest briefly resumes so its filesystem can be flushed. The runner works on a sparse copy, checks the result, and publishes it atomically. A shrink needs enough space for both the existing data and the ext4 filesystem metadata.
+
+Wait for the matching `volumes[].localResize` receipt. An `applied` outcome reports the new size. A `refused` outcome keeps the original disk and size. A `pending` outcome keeps the app fenced while the host retries. After a terminal receipt, remove the request and use the reported size in the next desired document so the app can start with its retained data.
+
 ### `zerofs`
 
 ```toml

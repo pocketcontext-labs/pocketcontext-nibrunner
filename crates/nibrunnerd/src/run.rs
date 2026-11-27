@@ -341,9 +341,12 @@ fn open_network() -> Result<Arc<dyn HostNetwork>, StartupError> {
 }
 
 pub fn host_versions(host: &Host) -> HostVersions {
-    crate::domain::report::versions::read_host_versions(&host.config.versions_file).unwrap_or_else(|_| {
-        crate::domain::report::versions::compiled_versions(FIRECRACKER_VERSION, &host.guest_image_version)
-    })
+    let mut versions = crate::domain::report::versions::read_host_versions(&host.config.versions_file)
+        .unwrap_or_else(|_| {
+            crate::domain::report::versions::compiled_versions(FIRECRACKER_VERSION, &host.guest_image_version)
+        });
+    versions.local_volume_resize = crate::domain::reconcile::local_resize::capable(host);
+    versions
 }
 
 pub async fn serve_proxy(host: &Arc<Host>) -> std::io::Result<()> {

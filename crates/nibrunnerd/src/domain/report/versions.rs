@@ -20,6 +20,7 @@ impl VersionsError {
 
 pub fn compiled_versions(firecracker: &str, guest_image: &str) -> HostVersions {
     HostVersions {
+        local_volume_resize: false,
         cpu_quarter_quota: true,
         agent: env!("CARGO_PKG_VERSION").to_string(),
         guest_image: guest_image.to_string(),

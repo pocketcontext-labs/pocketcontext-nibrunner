@@ -669,6 +669,8 @@ pub enum ExportState {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct HostVersions {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub local_volume_resize: bool,
     /// This host can enforce an instance CPU quota in quarter-core units.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cpu_quarter_quota: bool,

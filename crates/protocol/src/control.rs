@@ -433,10 +433,39 @@ pub struct InitialContents {
     pub destination_path: GuestPath,
 }
 
+/// A local-file volume maintenance request. The host records the result against its
+/// immutable operation ID before the control plane changes the guest allocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalResize {
+    pub request_id: String,
+    pub from_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum ResizeOutcome {
+    Pending,
+    Applied,
+    Refused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LocalResizeReport {
+    pub request_id: String,
+    pub outcome: ResizeOutcome,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct DesiredVolume {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_resize: Option<LocalResize>,
     pub volume_id: VolumeId,
     pub app_id: AppId,
     pub size_bytes: u64,
@@ -595,6 +624,8 @@ pub struct ReportedInstance {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ReportedVolume {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_resize: Option<LocalResizeReport>,
     pub volume_id: VolumeId,
     pub app_id: AppId,
     pub state: VolumeState,

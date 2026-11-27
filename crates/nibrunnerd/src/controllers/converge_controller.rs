@@ -98,6 +98,12 @@ impl ConvergeController {
     }
 
     async fn supports_volume_storage(&self, desired: &HostDesiredState) -> bool {
+        if let Err(reason) =
+            crate::domain::reconcile::local_resize::validate_change(&self.host, desired).await
+        {
+            self.note_refusal(reason).await;
+            return false;
+        }
         let error = if let Some(volumes) = &self.host.customer_volumes {
             let state = self.host.state.snapshot().await;
             let previous = self.host.accepted_document().await;
@@ -170,10 +176,14 @@ impl ConvergeController {
             let changes = cache.changes_in(desired);
             cache.accept(desired.clone()).then_some(changes)
         };
+        let resizing = crate::domain::reconcile::local_resize::requested(desired);
         let enabled = desired
             .instances
             .iter()
-            .filter(|instance| instance.desired_state != protocol::DesiredInstanceState::Stopped)
+            .filter(|instance| {
+                instance.desired_state != protocol::DesiredInstanceState::Stopped
+                    && !resizing.contains(&instance.app_id)
+            })
             .map(|instance| (instance.app_id.clone(), instance.deployment_id.clone()))
             .collect::<Vec<_>>();
         self.host.cron_runs.synchronize(&enabled).await;

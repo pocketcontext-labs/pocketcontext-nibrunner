@@ -974,6 +974,7 @@ mod schema {
             capacity,
             allocatable: capacity,
             versions: HostVersions {
+                local_volume_resize: false,
                 cpu_quarter_quota: false,
                 agent: "0.1.0".into(),
                 guest_image: "2026.8.3-1".into(),
@@ -981,6 +982,7 @@ mod schema {
                 firecracker: "1.12.0".into(),
             },
             volumes: vec![ReportedVolume {
+                local_resize: None,
                 usage: None,
                 volume_id: VolumeId::parse("vol-1").unwrap(),
                 app_id: AppId::parse("app-1").unwrap(),

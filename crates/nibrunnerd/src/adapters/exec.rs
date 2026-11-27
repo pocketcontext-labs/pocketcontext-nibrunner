@@ -16,6 +16,13 @@ impl CommandRunner for HostCommands {
             reason,
         };
 
+        let output = || {
+            if request.discard_output {
+                Stdio::null()
+            } else {
+                Stdio::piped()
+            }
+        };
         let mut command = tokio::process::Command::new(&request.command[0]);
         command
             .args(&request.command[1..])
@@ -24,8 +31,8 @@ impl CommandRunner for HostCommands {
             } else {
                 Stdio::null()
             })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(output())
+            .stderr(output())
             .kill_on_drop(true);
         let mut child = command.spawn().map_err(|error| unstartable(error.to_string()))?;
 

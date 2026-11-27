@@ -545,6 +545,16 @@
             }
           ]
         },
+        "localResize": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalResize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sizeBytes": {
           "type": "integer",
           "format": "uint64",
@@ -871,6 +881,24 @@
       },
       "required": [
         "port"
+      ]
+    },
+    "LocalResize": {
+      "description": "A local-file volume maintenance request. The host records the result against its\nimmutable operation ID before the control plane changes the guest allocation.",
+      "type": "object",
+      "properties": {
+        "fromBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "fromBytes"
       ]
     },
     "MaxLifetimeMs": {

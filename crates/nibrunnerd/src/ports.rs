@@ -13,6 +13,7 @@ use crate::adapters::vm::VmStatus;
 pub struct CommandRequest {
     pub command: Vec<String>,
     pub stdin: Option<String>,
+    pub discard_output: bool,
     pub timeout: Duration,
 }
 
@@ -21,6 +22,7 @@ impl CommandRequest {
         Self {
             command: command.iter().map(|part| part.to_string()).collect(),
             stdin: None,
+            discard_output: false,
             timeout: Duration::from_secs(120),
         }
     }

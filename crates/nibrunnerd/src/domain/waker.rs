@@ -127,6 +127,17 @@ impl AppWaker {
         }
         let wanted = {
             let cache = self.host.cache.lock().await;
+            if cache.latest().is_some_and(|desired| {
+                desired
+                    .volumes
+                    .iter()
+                    .any(|volume| &volume.app_id == app_id && volume.local_resize.is_some())
+            }) {
+                return Err(WakeRefusal::Failed {
+                    kind: WakeFailure::VolumeUnusable,
+                    reason: "volume resize in progress".into(),
+                });
+            }
             cache
                 .latest()
                 .and_then(|desired| {

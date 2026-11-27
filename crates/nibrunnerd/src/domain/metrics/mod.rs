@@ -604,6 +604,7 @@ pub(crate) mod tests {
                 cache_bytes: 500,
             },
             versions: HostVersions {
+                local_volume_resize: false,
                 cpu_quarter_quota: false,
                 agent: "0.1.0".into(),
                 guest_image: "test".into(),

@@ -389,6 +389,7 @@ pub(crate) fn write_generated(
 /// daemon so a report names the host rather than the build.
 fn stamp_versions(config: &HostConfig, guest_image: String) -> Result<(), InstallError> {
     let versions = HostVersions {
+        local_volume_resize: false,
         cpu_quarter_quota: true,
         agent: env!("CARGO_PKG_VERSION").to_string(),
         guest_image,

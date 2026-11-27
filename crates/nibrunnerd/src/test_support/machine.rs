@@ -269,6 +269,7 @@ impl RunningHost {
         let hostname = format!("app-{number}.test");
         Tenant {
             volume: DesiredVolume {
+                local_resize: None,
                 volume_id: volume_id.clone(),
                 app_id: app_id.clone(),
                 size_bytes: 64 * 1024 * 1024,

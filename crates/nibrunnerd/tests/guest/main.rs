@@ -26,6 +26,8 @@ mod isolation;
 #[cfg(target_os = "linux")]
 mod lifecycle;
 #[cfg(target_os = "linux")]
+mod local_resize;
+#[cfg(target_os = "linux")]
 mod manifest;
 #[cfg(target_os = "linux")]
 mod raw;

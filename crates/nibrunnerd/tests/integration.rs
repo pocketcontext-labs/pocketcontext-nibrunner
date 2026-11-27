@@ -218,6 +218,7 @@ async fn a_volume_is_formatted_holding_the_contents_the_document_gave_it() {
     };
     let volumes = local_volumes(directory.path(), commands(), archive.clone());
     let desired = protocol::DesiredVolume {
+        local_resize: None,
         volume_id: protocol::VolumeId::parse("vol-1").unwrap(),
         app_id: protocol::AppId::parse("app-1").unwrap(),
         size_bytes: 16 * 1024 * 1024,
@@ -329,6 +330,7 @@ async fn a_volume_is_formatted_by_the_real_tool_and_read_back_as_formatted() {
     let directory = tempfile::tempdir().unwrap();
     let volumes = local_volumes(directory.path(), commands(), Vec::new());
     let desired = protocol::DesiredVolume {
+        local_resize: None,
         volume_id: protocol::VolumeId::parse("vol-1").unwrap(),
         app_id: protocol::AppId::parse("app-1").unwrap(),
         size_bytes: 16 * 1024 * 1024,
@@ -365,6 +367,7 @@ async fn volumes_the_real_tool_formats_carry_a_filesystem_that_names_one_apart_f
     let directory = tempfile::tempdir().unwrap();
     let volumes = local_volumes(directory.path(), commands(), Vec::new());
     let volume_of = |name: &str| protocol::DesiredVolume {
+        local_resize: None,
         volume_id: protocol::VolumeId::parse(name).unwrap(),
         app_id: protocol::AppId::parse("app-1").unwrap(),
         size_bytes: 16 * 1024 * 1024,

@@ -1,3 +1,6 @@
+pub(crate) mod resize;
+pub(crate) mod resize_transaction;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

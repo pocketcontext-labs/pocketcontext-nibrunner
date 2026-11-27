@@ -332,6 +332,9 @@
         "guestImage": {
           "type": "string"
         },
+        "localVolumeResize": {
+          "type": "boolean"
+        },
         "zerofs": {
           "type": "string"
         }
@@ -360,6 +363,21 @@
       "description": "an IPv4 address",
       "type": "string",
       "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])$"
+    },
+    "LocalResizeReport": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/ResizeOutcome"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "outcome"
+      ]
     },
     "ObjectKey": {
       "description": "between 1 and 1024 characters",
@@ -718,6 +736,16 @@
             "null"
           ]
         },
+        "localResize": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalResizeReport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "message": {
           "anyOf": [
             {
@@ -766,6 +794,14 @@
         "state",
         "sizeBytes",
         "usage"
+      ]
+    },
+    "ResizeOutcome": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "applied",
+        "refused"
       ]
     },
     "Revision": {
