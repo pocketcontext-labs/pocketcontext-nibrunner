@@ -126,8 +126,8 @@ jobs:
         include:
           - shard: customer-writer
             families: customer_writer
-          - shard: cron
-            families: cron
+          - shard: cron+local-resize
+            families: cron local_resize
           - shard: sleep
             families: sleep
           - shard: idle+isolation+resources
