@@ -17,6 +17,12 @@ after how long, is set per instance in `desired.json`.
 | `on-request` | Start it on first deploy and on every request that arrives while it sleeps. Let it sleep in between. |
 | `stopped` | Stop the microVM. Requests to its hostnames get a 503. |
 
+An on-request deployment can wait for its first request too. Set `deferUntilRequest` to `true` on
+the desired instance and assign a new `deploymentId` when its configuration changes. The host
+registers the route and keeps the volume. The first request boots the new configuration. Later
+requests follow the usual sleep and wake policy. Hosts that support this report
+`versions.deferUntilRequest`.
+
 ## When it sleeps
 
 `activation.sleepWhen` says what puts an `on-request` instance to sleep:

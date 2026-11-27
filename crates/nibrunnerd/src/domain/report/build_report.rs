@@ -84,6 +84,7 @@ mod tests {
             allocatable: capacity,
             versions: HostVersions {
                 local_volume_resize: false,
+                defer_until_request: true,
                 cpu_quarter_quota: false,
                 agent: "sha".into(),
                 guest_image: "6.1".into(),

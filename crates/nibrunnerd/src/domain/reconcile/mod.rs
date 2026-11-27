@@ -92,10 +92,22 @@ async fn apply_stops(host: &Host, plan: &ReconcilePlan) {
                 instances::stop_instance(host, app_id, reason.as_str()).await;
             }
             InstancePlan::Replace { desired } => {
+                if desired.defer_until_request
+                    && host
+                        .state
+                        .record(&desired.app_id)
+                        .await
+                        .is_some_and(|record| record.deployment_id == desired.deployment_id)
+                {
+                    continue;
+                }
                 instances::stop_instance(host, &desired.app_id, InstanceStopReason::Superseded.as_str())
                     .await;
                 let _ = host.vms.discard(&desired.app_id).await;
                 host.state.drop_record(&desired.app_id).await;
+                if desired.defer_until_request {
+                    instances::sleep_instance(host, desired).await;
+                }
             }
             InstancePlan::Recover { desired } => {
                 // Same clean teardown as a replacement — stop, discard, forget the record — so the
@@ -124,6 +136,7 @@ async fn apply_stops(host: &Host, plan: &ReconcilePlan) {
 async fn apply_sleeps(host: &Host, plan: &ReconcilePlan) {
     for action in &plan.instances {
         if let InstancePlan::Sleep { desired } = action {
+            let _transition = host.state.transition(&desired.app_id).await;
             instances::sleep_instance(host, desired).await;
         }
     }
@@ -142,6 +155,7 @@ async fn apply_starts(host: &Host, plan: &ReconcilePlan) {
         .instances
         .iter()
         .filter_map(|action| match action {
+            InstancePlan::Replace { desired } if desired.defer_until_request => None,
             InstancePlan::Start { desired }
             | InstancePlan::Replace { desired }
             | InstancePlan::Recover { desired } => Some(desired),
@@ -372,6 +386,35 @@ mod tests {
         let tables = host.cron.tables().await.unwrap();
         assert_eq!(tables[0].deployment_id, desired.instances[0].deployment_id);
         assert!(tables[0].jobs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_deferred_revision_survives_restart_without_spending_a_start() {
+        let _serial = ONE_HOST_AT_A_TIME.lock().await;
+        let pool = crate::domain::store::in_memory().await;
+        let host = test_host_with(crate::repositories::Repositories::sqlite(pool.clone())).await;
+        let mut desired = desired_state(|state| {
+            state.instances = vec![desired_instance(|instance| {
+                instance.desired_state = DesiredInstanceState::Stopped;
+            })];
+            state.volumes = vec![desired_volume(|_| {})];
+        });
+        reconcile(host.arc(), &desired, Trigger::Change).await;
+        desired.instances[0].desired_state = DesiredInstanceState::OnRequest;
+        desired.instances[0].deployment_id = protocol::DeploymentId::parse("dep-funded").unwrap();
+        desired.instances[0].defer_until_request = true;
+        reconcile(host.arc(), &desired, Trigger::Change).await;
+        assert!(!host.vms.calls().contains(&VmCall::Boot));
+        drop(host);
+        let restored = test_host_with(crate::repositories::Repositories::sqlite(pool)).await;
+        restored.load().await.unwrap();
+        reconcile(restored.arc(), &desired, Trigger::Restart).await;
+        let record = restored.state.record(&app_id()).await.unwrap();
+        assert_eq!(record.state, InstanceState::Idle);
+        assert_eq!(record.deployment_id, desired.instances[0].deployment_id);
+        assert!(record.started_at.is_none());
+        assert_eq!(record.start_attempts.attempts, 0);
+        assert!(!restored.vms.calls().contains(&VmCall::Boot));
     }
 
     fn running_vm() -> VmStatus {

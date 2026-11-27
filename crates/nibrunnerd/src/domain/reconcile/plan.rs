@@ -210,8 +210,14 @@ fn plan_instance(
     }
     if wanted.desired_state == DesiredInstanceState::OnRequest {
         let Some(current) = current.filter(|instance| instance.present) else {
-            return InstancePlan::Start {
-                desired: wanted.clone(),
+            return if wanted.defer_until_request {
+                InstancePlan::Sleep {
+                    desired: wanted.clone(),
+                }
+            } else {
+                InstancePlan::Start {
+                    desired: wanted.clone(),
+                }
             };
         };
         if current.deployment_id.as_ref() != Some(&wanted.deployment_id) {
@@ -231,7 +237,7 @@ fn plan_instance(
                     app_id: wanted.app_id.clone(),
                 }
             }
-        } else if current.refused {
+        } else if current.refused && !wanted.defer_until_request {
             InstancePlan::Start {
                 desired: wanted.clone(),
             }

@@ -345,6 +345,7 @@ pub fn host_versions(host: &Host) -> HostVersions {
         .unwrap_or_else(|_| {
             crate::domain::report::versions::compiled_versions(FIRECRACKER_VERSION, &host.guest_image_version)
         });
+    versions.defer_until_request = true;
     versions.local_volume_resize = crate::domain::reconcile::local_resize::capable(host);
     versions
 }

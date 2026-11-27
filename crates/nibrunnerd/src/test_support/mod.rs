@@ -162,6 +162,7 @@ pub fn desired_instance(edit: impl FnOnce(&mut DesiredInstance)) -> DesiredInsta
         app_id: app_id(),
         deployment_id: deployment_id(),
         volume_id: volume_id(),
+        defer_until_request: false,
         desired_state: DesiredInstanceState::Running,
         idle_timeout_ms: None,
         activation: None,

@@ -297,6 +297,10 @@
         "config": {
           "$ref": "#/$defs/AppConfig"
         },
+        "deferUntilRequest": {
+          "description": "Stage this on-request deployment asleep. Its first request boots the new configuration.",
+          "type": "boolean"
+        },
         "deploymentId": {
           "description": "A running instance is replaced when this changes, and only then: a new layer or config\nunder the same `deploymentId` is not picked up.",
           "$ref": "#/$defs/DeploymentId"
@@ -358,6 +362,27 @@
           "$ref": "#/$defs/VolumeId"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "deferUntilRequest": {
+                "const": true
+              }
+            },
+            "required": [
+              "deferUntilRequest"
+            ]
+          },
+          "then": {
+            "properties": {
+              "desiredState": {
+                "const": "on-request"
+              }
+            }
+          }
+        }
+      ],
       "if": {
         "properties": {
           "desiredState": {

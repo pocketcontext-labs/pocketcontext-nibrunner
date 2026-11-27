@@ -15,6 +15,62 @@ const ANSWERED_WITHIN: Duration = Duration::from_secs(15);
 const IDLE_TIMEOUT_MS: u64 = 60_000;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_deferred_replacement_waits_for_http_and_boots_with_its_new_environment() {
+    let Some(host) = crate::host_with(|config| {
+        config.host_security.allow_active_smt =
+            std::env::var("NIBRUNNER_TEST_ALLOW_ACTIVE_SMT").as_deref() == Ok("1");
+    })
+    .await
+    else {
+        return;
+    };
+    let app = host.tenant(1).on_request(IDLE_TIMEOUT_MS);
+    host.deploy(std::slice::from_ref(&app)).await;
+    host.until_state(&app.app_id, InstanceState::Running).await;
+    assert_eq!(
+        host.get(&app, "/write?path=note&body=preserved")
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    host.let_sleep(&app).await;
+
+    let held = app.clone().edited(|instance| {
+        instance.desired_state = protocol::DesiredInstanceState::Stopped;
+    });
+    host.deploy(std::slice::from_ref(&held)).await;
+    host.until_state(&held.app_id, InstanceState::Stopped).await;
+    let funded = app.redeployed("funded").edited(|instance| {
+        instance.defer_until_request = true;
+        instance.config.command.environment =
+            serde_json::from_value(serde_json::json!({"STORAGE_MODE":"funded"})).unwrap();
+    });
+    host.deploy(std::slice::from_ref(&funded)).await;
+    host.until(
+        "the funded deployment is waiting for its first request",
+        |report| {
+            report.instances.iter().any(|instance| {
+                instance.app_id == funded.app_id
+                    && instance.deployment_id == funded.instance.deployment_id
+                    && instance.state == InstanceState::Idle
+                    && instance.started_at.is_none()
+            })
+        },
+    )
+    .await;
+    let answer = host.get(&funded, "/env?name=STORAGE_MODE").await.unwrap();
+    assert_eq!(answer.status, 200);
+    assert_eq!(answer.body, "funded");
+    assert_eq!(
+        host.get(&funded, "/read?path=note").await.unwrap().body,
+        "preserved"
+    );
+    host.until_state(&funded.app_id, InstanceState::Running).await;
+    host.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn requests_for_different_sleeping_apps_queue_behind_one_restore_slot() {
     let Some(host) =
         crate::host_with(|config| config.max_concurrent_vm_starts = std::num::NonZeroU16::new(1).unwrap())

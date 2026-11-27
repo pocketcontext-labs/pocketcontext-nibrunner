@@ -326,6 +326,10 @@
           "description": "This host can enforce an instance CPU quota in quarter-core units.",
           "type": "boolean"
         },
+        "deferUntilRequest": {
+          "description": "This host can stage an on-request deployment without booting it.",
+          "type": "boolean"
+        },
         "firecracker": {
           "type": "string"
         },

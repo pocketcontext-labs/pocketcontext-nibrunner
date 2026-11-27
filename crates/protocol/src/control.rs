@@ -262,6 +262,9 @@ pub struct DesiredInstance {
     /// One of this document's `volumes`, mounted in the guest as the app's data directory.
     pub volume_id: VolumeId,
     pub desired_state: DesiredInstanceState,
+    /// Stage this on-request deployment asleep. Its first request boots the new configuration.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub defer_until_request: bool,
     /// How long an `on-request` instance stays up after its last request before it sleeps: the
     /// older spelling of `activation.sleepWhen`, refused beside it. 300000 when neither is named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,6 +319,8 @@ struct DesiredInstanceFields {
     volume_id: VolumeId,
     desired_state: DesiredInstanceState,
     #[serde(default)]
+    defer_until_request: bool,
+    #[serde(default)]
     idle_timeout_ms: Option<IdleTimeoutMs>,
     #[serde(default)]
     activation: Option<ActivationPolicy>,
@@ -332,6 +337,11 @@ impl TryFrom<DesiredInstanceFields> for DesiredInstance {
     type Error = InvalidValue;
 
     fn try_from(fields: DesiredInstanceFields) -> Result<Self, Self::Error> {
+        if fields.defer_until_request && fields.desired_state != DesiredInstanceState::OnRequest {
+            return Err(InvalidValue::new_public(
+                "only an on-request instance may defer until a request",
+            ));
+        }
         if fields.activation.is_some() && fields.idle_timeout_ms.is_some() {
             return Err(InvalidValue::new_public(
                 "activation and idleTimeoutMs both say when an instance sleeps; name one",
@@ -373,6 +383,7 @@ impl TryFrom<DesiredInstanceFields> for DesiredInstance {
             deployment_id: fields.deployment_id,
             volume_id: fields.volume_id,
             desired_state: fields.desired_state,
+            defer_until_request: fields.defer_until_request,
             idle_timeout_ms: fields.idle_timeout_ms,
             activation: fields.activation,
             layers: fields.layers,
@@ -389,6 +400,10 @@ impl TryFrom<DesiredInstanceFields> for DesiredInstance {
 // passes is one this host takes.
 #[cfg(feature = "schema")]
 fn desired_instance_rules(schema: &mut schemars::Schema) {
+    schema.insert("allOf".into(), serde_json::json!([{
+        "if": { "required": ["deferUntilRequest"], "properties": { "deferUntilRequest": { "const": true } } },
+        "then": { "properties": { "desiredState": { "const": "on-request" } } }
+    }]));
     schema.insert(
         "not".into(),
         serde_json::json!({ "required": ["activation", "idleTimeoutMs"] }),

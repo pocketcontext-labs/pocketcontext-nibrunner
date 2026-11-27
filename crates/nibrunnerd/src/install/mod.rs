@@ -390,6 +390,7 @@ pub(crate) fn write_generated(
 fn stamp_versions(config: &HostConfig, guest_image: String) -> Result<(), InstallError> {
     let versions = HostVersions {
         local_volume_resize: false,
+        defer_until_request: true,
         cpu_quarter_quota: true,
         agent: env!("CARGO_PKG_VERSION").to_string(),
         guest_image,

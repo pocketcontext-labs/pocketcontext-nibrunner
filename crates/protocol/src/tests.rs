@@ -856,6 +856,21 @@ fn a_document_that_names_no_policy_means_what_it_meant_before_there_were_any() {
 }
 
 #[test]
+fn deferred_activation_requires_an_on_request_deployment_and_is_opt_in() {
+    for state in ["running", "stopped", "on-request"] {
+        let deferral = |enabled| {
+            read(instance_with(|document| {
+                document["desiredState"] = serde_json::json!(state);
+                document["deferUntilRequest"] = serde_json::json!(enabled);
+            }))
+        };
+        assert!(!deferral(false).unwrap().defer_until_request);
+        assert_eq!(deferral(true).is_ok(), state == "on-request");
+    }
+    assert!(!read(instance_with(|_| {})).unwrap().defer_until_request);
+}
+
+#[test]
 fn a_document_that_says_when_an_instance_sleeps_twice_is_refused() {
     let refused = read(instance_with(|document| {
         document["idleTimeoutMs"] = serde_json::json!(900_000);
@@ -975,6 +990,7 @@ mod schema {
             allocatable: capacity,
             versions: HostVersions {
                 local_volume_resize: false,
+                defer_until_request: true,
                 cpu_quarter_quota: false,
                 agent: "0.1.0".into(),
                 guest_image: "2026.8.3-1".into(),

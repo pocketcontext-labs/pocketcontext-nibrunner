@@ -605,6 +605,7 @@ pub(crate) mod tests {
             },
             versions: HostVersions {
                 local_volume_resize: false,
+                defer_until_request: true,
                 cpu_quarter_quota: false,
                 agent: "0.1.0".into(),
                 guest_image: "test".into(),

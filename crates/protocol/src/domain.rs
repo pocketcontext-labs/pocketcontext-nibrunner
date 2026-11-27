@@ -671,6 +671,9 @@ pub enum ExportState {
 pub struct HostVersions {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub local_volume_resize: bool,
+    /// This host can stage an on-request deployment without booting it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub defer_until_request: bool,
     /// This host can enforce an instance CPU quota in quarter-core units.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cpu_quarter_quota: bool,
