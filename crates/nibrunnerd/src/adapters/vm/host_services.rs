@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use guest_contract::vsock::{GUEST_VSOCK_FILENAME, HOST_SERVICES_PORT};
+use guest_contract::vsock::{
+    GUEST_VSOCK_FILENAME, HOST_SERVICES_PORT, MAX_SIGN_IN_EMAIL_FRAME, SIGN_IN_EMAIL_PORT,
+};
 use protocol::{AppId, DeploymentId, DesiredInstanceState};
-use tokio::io::AsyncWriteExt;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -19,14 +21,47 @@ const CONNECTIONS_PER_APP: usize = 32;
 const CONNECTIONS_PER_HOST: usize = 512;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn socket_path(jail: &Path) -> PathBuf {
-    jail.join(format!("{GUEST_VSOCK_FILENAME}_{HOST_SERVICES_PORT}"))
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Service {
+    S3,
+    SignInEmail,
 }
 
-// The service learns the app and deployment from this line alone. Both come from the jail the
-// guest connected through, never from the guest.
-pub(crate) fn header(app: &AppId, deployment: &DeploymentId) -> String {
-    format!("CONNECT {app} {deployment}\n")
+impl Service {
+    fn socket_path(self, jail: &Path) -> PathBuf {
+        let port = match self {
+            Self::S3 => HOST_SERVICES_PORT,
+            Self::SignInEmail => SIGN_IN_EMAIL_PORT,
+        };
+        jail.join(format!("{GUEST_VSOCK_FILENAME}_{port}"))
+    }
+
+    fn bind(self, jail: &Path, uid: u32, gid: u32) -> io::Result<UnixListener> {
+        let path = self.socket_path(jail);
+        let listener = crate::unix_socket::bind(&path)?;
+        crate::unix_socket::own(&path, uid, gid)?;
+        Ok(listener)
+    }
+
+    // The listener and jail supply all three fields; none come from guest bytes.
+    fn header(self, app: &AppId, deployment: &DeploymentId) -> String {
+        let verb = match self {
+            Self::S3 => "CONNECT",
+            Self::SignInEmail => "CONNECT-MAIL",
+        };
+        format!("{verb} {app} {deployment}\n")
+    }
+
+    async fn refuse(self, socket: &mut UnixStream, status: &str) {
+        if self == Self::SignInEmail {
+            // Closing a Unix stream with unread request bytes resets the peer after the reply.
+            let mut request = Vec::new();
+            let mut reader = BufReader::new((&mut *socket).take(MAX_SIGN_IN_EMAIL_FRAME as u64));
+            let _ = timeout(Duration::from_secs(2), reader.read_until(b'\n', &mut request)).await;
+            let response = format!("{{\"status\":\"{status}\"}}\n");
+            let _ = timeout(Duration::from_secs(1), socket.write_all(response.as_bytes())).await;
+        }
+    }
 }
 
 struct Relay {
@@ -43,7 +78,7 @@ struct Guest {
 }
 
 impl Relay {
-    async fn enabled(&self, guest: &Guest) -> bool {
+    async fn enabled(&self, guest: &Guest, service: Service) -> bool {
         if guest.processes.running_deployment(&guest.app).as_ref() != Some(&guest.deployment) {
             return false;
         }
@@ -53,7 +88,10 @@ impl Relay {
                 i.app_id == guest.app
                     && i.deployment_id == guest.deployment
                     && i.desired_state != DesiredInstanceState::Stopped
-                    && i.host_s3()
+                    && match service {
+                        Service::S3 => i.host_s3(),
+                        Service::SignInEmail => i.sign_in_email.is_some(),
+                    }
             })
         })
     }
@@ -64,27 +102,41 @@ impl Relay {
         Some((app, host))
     }
 
-    async fn serve(self: Arc<Self>, guest: Arc<Guest>, mut socket: UnixStream) {
+    async fn serve(self: Arc<Self>, guest: Arc<Guest>, kind: Service, mut socket: UnixStream) {
         let Some(permits) = self.permits(&guest) else {
             tracing::debug!(app_id = %guest.app, "host service connection refused: too many open");
+            if kind == Service::SignInEmail {
+                let _ = socket.try_write(b"{\"status\":\"throttled\"}\n");
+            }
             return;
         };
-        if !self.enabled(&guest).await {
+        if !self.enabled(&guest, kind).await {
             tracing::debug!(app_id = %guest.app, "host service connection refused: not enabled for the running deployment");
+            kind.refuse(&mut socket, "disabled").await;
             return;
         }
         let Ok(Ok(mut service)) = timeout(CONNECT_TIMEOUT, UnixStream::connect(&self.service)).await else {
             tracing::warn!(app_id = %guest.app, "the host service socket could not be reached");
+            kind.refuse(&mut socket, "temporarily_unavailable").await;
             return;
         };
         if service
-            .write_all(header(&guest.app, &guest.deployment).as_bytes())
+            .write_all(kind.header(&guest.app, &guest.deployment).as_bytes())
             .await
             .is_err()
         {
+            kind.refuse(&mut socket, "temporarily_unavailable").await;
             return;
         }
-        let _ = tokio::io::copy_bidirectional(&mut socket, &mut service).await;
+        let transfer = tokio::io::copy_bidirectional(&mut socket, &mut service);
+        match kind {
+            Service::S3 => {
+                let _ = transfer.await;
+            }
+            Service::SignInEmail => {
+                let _ = timeout(Duration::from_secs(12), transfer).await;
+            }
+        }
         drop(permits);
     }
 }
@@ -133,9 +185,8 @@ impl HostServicesForwarder {
             previous.abort();
             let _ = previous.await;
         }
-        let path = socket_path(jail);
-        let listener = crate::unix_socket::bind(&path)?;
-        crate::unix_socket::own(&path, uid, gid)?;
+        let s3 = Service::S3.bind(jail, uid, gid)?;
+        let mail = Service::SignInEmail.bind(jail, uid, gid)?;
         let guest = Arc::new(Guest {
             app: app.clone(),
             deployment: deployment.clone(),
@@ -143,8 +194,13 @@ impl HostServicesForwarder {
             connections: Arc::new(Semaphore::new(CONNECTIONS_PER_APP)),
         });
         let task = tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                tokio::spawn(relay.clone().serve(guest.clone(), socket));
+            loop {
+                let (kind, connection) = tokio::select! {
+                    connection = s3.accept() => (Service::S3, connection),
+                    connection = mail.accept() => (Service::SignInEmail, connection),
+                };
+                let Ok((socket, _)) = connection else { break };
+                tokio::spawn(relay.clone().serve(guest.clone(), kind, socket));
             }
         });
         listeners.insert(app.clone(), task);

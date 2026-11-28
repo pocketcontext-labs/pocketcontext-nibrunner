@@ -188,9 +188,6 @@ pub async fn build_host(
         volumes: volumes.clone(),
         logs,
         cron_registration,
-        sign_in_email: crate::adapters::vm::sign_in_email::SignInEmailService::from_service_credentials(
-            cache.clone(),
-        ),
         host_services: crate::adapters::vm::host_services::HostServicesForwarder::new(
             config
                 .host_services

@@ -69,7 +69,7 @@ async fn fixture(apps: &[(&str, bool)]) -> Fixture {
 }
 
 async fn guest(jail: &Path) -> UnixStream {
-    UnixStream::connect(socket_path(jail)).await.unwrap()
+    UnixStream::connect(Service::S3.socket_path(jail)).await.unwrap()
 }
 
 async fn closed_unanswered(mut socket: UnixStream) -> bool {
@@ -128,16 +128,52 @@ async fn a_disabled_forwarder_listens_on_no_jail() {
         )
         .await
         .unwrap();
-    assert!(!socket_path(root.path()).exists());
+    assert!(!Service::S3.socket_path(root.path()).exists());
 }
 
 #[test]
 fn the_header_names_the_app_and_deployment_on_one_line() {
     assert_eq!(
-        header(
+        Service::S3.header(
             &AppId::parse("d-000000000000001").unwrap(),
             &DeploymentId::parse("d-000000000000001-dep-7").unwrap()
         ),
         "CONNECT d-000000000000001 d-000000000000001-dep-7\n"
     );
+}
+
+#[tokio::test]
+async fn a_mail_only_guest_reaches_the_agent_on_its_own_mail_channel() {
+    let f = fixture(&[("alpha", false)]).await;
+    let jail = f.root.path().join("alpha");
+    let mut desired = f.cache.lock().await.latest().unwrap().clone();
+    desired.instances[0].sign_in_email = Some(protocol::SignInEmail {
+        recipient: protocol::SignInMailbox::parse("owner@example.org").unwrap(),
+    });
+    f.cache.lock().await.accept(desired);
+    assert!(closed_unanswered(guest(&jail).await).await);
+    let mut client = UnixStream::connect(Service::SignInEmail.socket_path(&jail))
+        .await
+        .unwrap();
+    client.write_all(b"{\"code\":\"012345\"}\n").await.unwrap();
+    let (service, _) = timeout(CONNECT_TIMEOUT, f.service.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut service = BufReader::new(service);
+    let mut line = String::new();
+    service.read_line(&mut line).await.unwrap();
+    assert_eq!(line, format!("CONNECT-MAIL alpha {}\n", deployment_id()));
+    line.clear();
+    service.read_line(&mut line).await.unwrap();
+    assert_eq!(line, "{\"code\":\"012345\"}\n");
+    service
+        .get_mut()
+        .write_all(b"{\"status\":\"accepted\"}\n")
+        .await
+        .unwrap();
+    service.get_mut().shutdown().await.unwrap();
+    line.clear();
+    client.read_to_string(&mut line).await.unwrap();
+    assert_eq!(line, "{\"status\":\"accepted\"}\n");
 }

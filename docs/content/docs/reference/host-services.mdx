@@ -1,6 +1,6 @@
 ---
 title: Host services
-description: A guest's S3 traffic relayed to a local host service, with no credential in the guest.
+description: Per-deployment S3 and sign-in email traffic over a local service socket.
 ---
 
 Name the local service's socket in `config.toml`:
@@ -10,7 +10,9 @@ Name the local service's socket in `config.toml`:
 socket = "/run/drop-agent/host-services.sock"
 ```
 
-Then enable host services on an instance in the desired document:
+## S3
+
+Enable S3 on an instance in the desired document:
 
 ```json
 "hostServices": { "s3": true }
@@ -26,3 +28,11 @@ Then enable host services on an instance in the desired document:
   An instance with `hostServices.s3` gets no workload identity token. A document that also sets
   `AWS_WORKLOAD_IDENTITY` is refused. Host-service connections do not keep an app awake.
 </Callout>
+
+## Sign-in email
+
+Enable `signInEmail.recipient` independently on each eligible instance. For a connection on
+vsock port 51006, NibRunner checks the jail's running deployment and the current desired
+binding, then sends `CONNECT-MAIL <appId> <deploymentId>\n` to the same Unix socket.
+The agent resolves the recipient and returns the delivery outcome to the guest.
+See the [sign-in email protocol](/docs/guides/host-security#drop-sign-in-email).
