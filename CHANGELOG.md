@@ -1,5 +1,11 @@
 # Changelog
 
+## [2026.11.22] - 2026-11-28
+
+### Fixes
+
+- **host-services:** Keep host services open while a stopping guest runs its terminate hook
+
 ## [2026.11.21] - 2026-11-28
 
 ### Features
