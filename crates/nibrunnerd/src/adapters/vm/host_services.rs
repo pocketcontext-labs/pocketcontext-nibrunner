@@ -7,7 +7,7 @@ use std::time::Duration;
 use guest_contract::vsock::{
     GUEST_VSOCK_FILENAME, HOST_SERVICES_PORT, MAX_SIGN_IN_EMAIL_FRAME, SIGN_IN_EMAIL_PORT,
 };
-use protocol::{AppId, DeploymentId, DesiredInstanceState};
+use protocol::{AppId, DeploymentId, DesiredInstance, HostDesiredState};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
@@ -75,6 +75,64 @@ struct Guest {
     deployment: DeploymentId,
     processes: VmProcesses,
     connections: Arc<Semaphore>,
+    grants: std::sync::Mutex<Grants>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Grants {
+    s3: bool,
+    sign_in_email: bool,
+}
+
+impl Grants {
+    fn of(instance: &DesiredInstance) -> Self {
+        Self {
+            s3: instance.host_s3(),
+            sign_in_email: instance.sign_in_email.is_some(),
+        }
+    }
+
+    fn allow(self, service: Service) -> bool {
+        match service {
+            Service::S3 => self.s3,
+            Service::SignInEmail => self.sign_in_email,
+        }
+    }
+}
+
+enum DesiredGuest {
+    Same(Grants),
+    Replaced,
+    Removed,
+}
+
+impl DesiredGuest {
+    fn in_document(desired: Option<&HostDesiredState>, app: &AppId, deployment: &DeploymentId) -> Self {
+        let instance = desired.and_then(|desired| desired.instances.iter().find(|i| i.app_id == *app));
+        match instance {
+            Some(instance) if instance.deployment_id == *deployment => Self::Same(Grants::of(instance)),
+            Some(_) => Self::Replaced,
+            None => Self::Removed,
+        }
+    }
+}
+
+impl Guest {
+    // A stopped or removed instance keeps its grants until its VM stops, so the terminate hook
+    // can finish a final sync through the services; `detach` after the hook ends them. A
+    // replacement revokes them for good, even if the app is removed afterwards.
+    fn follow(&self, desired: Option<&HostDesiredState>) -> Grants {
+        let mut grants = self
+            .grants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match DesiredGuest::in_document(desired, &self.app, &self.deployment) {
+            DesiredGuest::Same(current) => *grants = current,
+            DesiredGuest::Replaced => *grants = Grants::default(),
+            DesiredGuest::Removed => {}
+        }
+        *grants
+    }
 }
 
 impl Relay {
@@ -82,18 +140,7 @@ impl Relay {
         if guest.processes.running_deployment(&guest.app).as_ref() != Some(&guest.deployment) {
             return false;
         }
-        let cache = self.cache.lock().await;
-        cache.latest().is_some_and(|desired| {
-            desired.instances.iter().any(|i| {
-                i.app_id == guest.app
-                    && i.deployment_id == guest.deployment
-                    && i.desired_state != DesiredInstanceState::Stopped
-                    && match service {
-                        Service::S3 => i.host_s3(),
-                        Service::SignInEmail => i.sign_in_email.is_some(),
-                    }
-            })
-        })
+        guest.follow(self.cache.lock().await.latest()).allow(service)
     }
 
     fn permits(&self, guest: &Guest) -> Option<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
@@ -192,12 +239,22 @@ impl HostServicesForwarder {
             deployment: deployment.clone(),
             processes,
             connections: Arc::new(Semaphore::new(CONNECTIONS_PER_APP)),
+            grants: std::sync::Mutex::default(),
         });
+        let mut changes = {
+            let cache = relay.cache.lock().await;
+            guest.follow(cache.latest());
+            cache.watch()
+        };
         let task = tokio::spawn(async move {
             loop {
                 let (kind, connection) = tokio::select! {
                     connection = s3.accept() => (Service::S3, connection),
                     connection = mail.accept() => (Service::SignInEmail, connection),
+                    Ok(()) = changes.changed() => {
+                        guest.follow(relay.cache.lock().await.latest());
+                        continue;
+                    }
                 };
                 let Ok((socket, _)) = connection else { break };
                 tokio::spawn(relay.clone().serve(guest.clone(), kind, socket));

@@ -15,4 +15,6 @@ The guest receives `NIBRUN_HOOK_PORT` and `NIBRUN_HOOK_TOKEN`. Listen on the gue
 
 Return a 2xx response after the requested work finishes. The host sends one request per notification. Delivery requires a running guest whose launch deployment matches the applied instance. Sleeping guests receive no request until they wake.
 
+Host services stay open to a stopping guest until its VM stops, even after the desired state marks the instance stopped or removes it. A terminate hook can therefore finish a final sync through them. Only the launch deployment keeps them, and only for the services its desired instance enabled.
+
 The default timeout is 10 seconds. Set `lifecycle_hook_timeout_seconds` in the host configuration to change it. A failure or timeout during suspend or terminate is recorded and the transition continues. The instance in `reported.json` includes `lastHook` with the event, outcome (`ok`, `error`, `timeout` or `unreachable`), completion time and duration in milliseconds. Guest response bodies and credentials stay out of the report.
