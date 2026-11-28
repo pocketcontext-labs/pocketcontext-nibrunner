@@ -39,9 +39,10 @@ SMT siblings report `0`, including hardware without SMT support.
 The guest machine configuration's `smt: false` describes virtual CPU topology. It does not
 disable SMT on the host. CPU quotas do not reserve physical cores or prevent sibling sharing.
 
-### Test hosts
+### Operator-admitted executables
 
-A test host whose apps all trust each other can keep SMT active with
+A host whose operator admits every executable it runs, such as a platform that deploys only
+reviewed releases and builds from invited developers, can keep SMT active with
 [`host_security`](/docs/reference/config#hostconfig-host_security):
 
 ```toml
@@ -51,7 +52,8 @@ allow_active_smt = true
 
 Installation and startup then accept active SMT, log a warning, and publish
 `nibrunner_host_smt_active` as `1`. Missing, unreadable or unknown SMT status is still refused, and
-the KSM requirement is unchanged. Do not set it on a host that runs apps from different tenants.
+the KSM requirement is unchanged. Do not set it on a host that runs executables its operator has not admitted, such as arbitrary
+code uploaded by anonymous users.
 
 Disabling SMT can reduce aggregate CPU throughput. Measure the apps' throughput and latency
 before sizing a production host. The [capacity estimate](/docs/guides/host-capacity) considers

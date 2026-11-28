@@ -46,7 +46,7 @@ fn check_smt(cpu_directory: &Path, policy: &HostSecurityConfig) -> Result<bool, 
             return Err(SecurityError::SmtActive);
         }
         tracing::warn!(
-            "host SMT is active and host_security.allow_active_smt accepts it: sibling threads can observe each other's data, so run only apps that trust each other; see {SECURITY_DOCS}#host-smt"
+            "host SMT is active and host_security.allow_active_smt accepts it: sibling threads can observe each other's data, so run only executables the operator admits; see {SECURITY_DOCS}#host-smt"
         );
     }
     Ok(active)

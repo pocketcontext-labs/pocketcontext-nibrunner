@@ -26,7 +26,7 @@
       "$ref": "#/$defs/guest_connections"
     },
     "host_security": {
-      "description": "Explicitly managed whole-device storage for snapshots and ZeroFS caches. Absent leaves\nmounting to the operator. Devices without filesystem signatures are initialized,\ndiscarding any unrecognized raw contents.\nAbsent enforces every host requirement. Present only on a test host that accepts a\nweaker one.",
+      "description": "Explicitly managed whole-device storage for snapshots and ZeroFS caches. Absent leaves\nmounting to the operator. Devices without filesystem signatures are initialized,\ndiscarding any unrecognized raw contents.\nAbsent enforces every host requirement. Present only on a host whose operator accepts\na weaker one.",
       "$ref": "#/$defs/host_security"
     },
     "host_services": {
@@ -191,7 +191,7 @@
       "type": "object",
       "properties": {
         "allow_active_smt": {
-          "description": "Start with host SMT active, warning and publishing `nibrunner_host_smt_active` instead\nof refusing. Sibling threads of one core can observe each other's data, so only for a\ntest host whose apps all trust each other. An unknown SMT status is still refused.",
+          "description": "Start with host SMT active, warning and publishing `nibrunner_host_smt_active` instead\nof refusing. Sibling threads of one core can observe each other's data, so only for a\nhost whose operator admits every executable it runs. An unknown SMT status is still\nrefused.",
           "type": "boolean"
         }
       },

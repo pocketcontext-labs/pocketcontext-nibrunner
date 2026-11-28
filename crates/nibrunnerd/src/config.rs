@@ -234,8 +234,8 @@ impl StorageFilesystem {
 /// What this host accepts about the machine under it that it would otherwise refuse.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HostSecurityConfig {
-    /// For a test host whose apps all trust each other: sibling threads can observe each other,
-    /// so the startup refusal of active SMT is traded for a warning and a gauge.
+    /// For a host whose operator admits every executable it runs: sibling threads can observe
+    /// each other, so the startup refusal of active SMT is traded for a warning and a gauge.
     pub allow_active_smt: bool,
 }
 
@@ -368,8 +368,8 @@ mod file {
         /// Explicitly managed whole-device storage for snapshots and ZeroFS caches. Absent leaves
         /// mounting to the operator. Devices without filesystem signatures are initialized,
         /// discarding any unrecognized raw contents.
-        /// Absent enforces every host requirement. Present only on a test host that accepts a
-        /// weaker one.
+        /// Absent enforces every host requirement. Present only on a host whose operator accepts
+        /// a weaker one.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub(super) host_security: Option<HostSecurity>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -422,7 +422,8 @@ mod file {
     pub(super) struct HostSecurity {
         /// Start with host SMT active, warning and publishing `nibrunner_host_smt_active` instead
         /// of refusing. Sibling threads of one core can observe each other's data, so only for a
-        /// test host whose apps all trust each other. An unknown SMT status is still refused.
+        /// host whose operator admits every executable it runs. An unknown SMT status is still
+        /// refused.
         pub(super) allow_active_smt: Option<bool>,
     }
 
