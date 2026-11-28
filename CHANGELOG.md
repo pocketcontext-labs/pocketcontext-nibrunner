@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026.11.21] - 2026-11-28
+
+### Features
+
+- Forward guest sign-in email through host services
+- **runner:** Stage on-request deployments until their first request
+
+### Documentation
+
+- Allow active SMT on hosts whose operator admits every executable
+
 ## [2026.11.20] - 2026-11-27
 
 ### Features
